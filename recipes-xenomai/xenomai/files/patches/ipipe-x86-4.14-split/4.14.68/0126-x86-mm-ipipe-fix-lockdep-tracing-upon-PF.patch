@@ -1,0 +1,29 @@
+From e950b7a9edeb3f10c0ab7e6e8b14b16302fe71c5 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 19 Sep 2018 11:50:31 +0200
+Subject: [PATCH 126/137] x86/mm: ipipe: fix lockdep tracing upon PF
+
+---
+ arch/x86/mm/fault.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/mm/fault.c b/arch/x86/mm/fault.c
+index 76e3a22..f054e7f 100644
+--- a/arch/x86/mm/fault.c
++++ b/arch/x86/mm/fault.c
+@@ -1251,8 +1251,10 @@ static inline bool smap_violation(int error_code, struct pt_regs *regs)
+ 	u32 pkey;
+ 
+ #ifdef CONFIG_IPIPE
+-	if (ipipe_root_domain != ipipe_head_domain)
+-		hard_cond_local_irq_enable();
++	if (ipipe_root_domain != ipipe_head_domain) {
++		trace_hardirqs_on();
++		hard_local_irq_enable();
++	}
+ #endif
+ 	tsk = current;
+ 	mm = tsk->mm;
+-- 
+1.9.1
+

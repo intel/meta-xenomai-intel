@@ -1,0 +1,71 @@
+From 2620daf1cea8cbd0d53656fdc37a1d0280472022 Mon Sep 17 00:00:00 2001
+From: florent pirou <florent.pirou@intel.com>
+Date: Thu, 6 Dec 2018 14:47:25 +0100
+Subject: [PATCH] use i210/i211 rtnet driver by default
+
+Signed-off-by: florent pirou <florent.pirou@intel.com>
+---
+ utils/net/rtnet.conf.in | 16 +++++++---------
+ 1 file changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/utils/net/rtnet.conf.in b/utils/net/rtnet.conf.in
+index 12335d2..eb62a5a 100644
+--- a/utils/net/rtnet.conf.in
++++ b/utils/net/rtnet.conf.in
+@@ -13,10 +13,8 @@ TDMACFG="@sbindir@/tdmacfg"
+ # Module suffix: ".o" for 2.4 kernels, ".ko" for later versions
+ MODULE_EXT=".ko"
+ 
+-
+-
+ # RT-NIC driver
+-RT_DRIVER="rt_eepro100"
++RT_DRIVER="rt_igb"
+ RT_DRIVER_OPTIONS=""
+ 
+ # PCI addresses of RT-NICs to claim (format: 0000:00:00.0)
+@@ -30,7 +28,7 @@ REBIND_RT_NICS=""
+ #   The TDMA_CONFIG file overrides these parameters for masters and backup
+ #   masters. Leave blank if you do not use IP addresses or if this station is
+ #   intended to retrieve its IP from the master based on its MAC address.
+-IPADDR="10.0.0.1"
++IPADDR="127.0.0.2"
+ NETMASK=""
+ 
+ # Start realtime loopback device ("yes" or "no")
+@@ -40,7 +38,7 @@ RT_LOOPBACK="yes"
+ RT_PROTOCOLS="udp packet"
+ 
+ # Start capturing interface ("yes" or "no")
+-RTCAP="no"
++RTCAP="yes"
+ 
+ 
+ 
+@@ -59,19 +57,19 @@ STAGE_2_CMDS=""
+ # TDMA mode of the station ("master" or "slave")
+ #   Start backup masters in slave mode, it will then be switched to master
+ #   mode automatically during startup.
+-TDMA_MODE="master"
++#TDMA_MODE="master"
+ 
+ 
+ # Master parameters
+ 
+ # Simple setup: List of TDMA slaves
+-TDMA_SLAVES="10.0.0.2 10.0.0.3 10.0.0.4"
++#TDMA_SLAVES="127.0.0.1"
+ 
+ # Simple setup: Cycle time in microsecond
+-TDMA_CYCLE="5000"
++#TDMA_CYCLE="5000"
+ 
+ # Simple setup: Offset in microsecond between TDMA slots
+-TDMA_OFFSET="200"
++# TDMA_OFFSET="200"
+ 
+ # Advanced setup: Config file containing all TDMA station parameters
+ #   To use this mode, uncomment the following line and disable the
+-- 
+1.9.1
+

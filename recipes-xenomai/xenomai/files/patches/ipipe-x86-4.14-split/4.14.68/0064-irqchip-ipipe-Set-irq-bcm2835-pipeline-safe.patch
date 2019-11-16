@@ -1,0 +1,24 @@
+From 4fb9a23dab192871009b909ed3a2b08baf7454fa Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Mon, 9 Apr 2018 02:53:00 +0200
+Subject: [PATCH 064/137] irqchip: ipipe: Set irq-bcm2835 pipeline safe
+
+---
+ drivers/irqchip/irq-bcm2835.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/irqchip/irq-bcm2835.c b/drivers/irqchip/irq-bcm2835.c
+index bf8c9d4..8a1b729 100644
+--- a/drivers/irqchip/irq-bcm2835.c
++++ b/drivers/irqchip/irq-bcm2835.c
+@@ -115,6 +115,7 @@ static void armctrl_unmask_irq(struct irq_data *d)
+ 	.irq_hold = armctrl_mask_irq,
+ 	.irq_release = armctrl_unmask_irq,
+ #endif
++	.flags	     = IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ static int armctrl_xlate(struct irq_domain *d, struct device_node *ctrlr,
+-- 
+1.9.1
+

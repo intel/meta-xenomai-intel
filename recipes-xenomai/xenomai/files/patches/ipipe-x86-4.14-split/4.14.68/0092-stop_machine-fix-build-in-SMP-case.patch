@@ -1,0 +1,25 @@
+From 2f2910e4ccd892aa6b93552307b315318f78d58e Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 4 Sep 2018 18:09:16 +0200
+Subject: [PATCH 092/137] stop_machine: fix build in !SMP case
+
+---
+ include/linux/stop_machine.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/include/linux/stop_machine.h b/include/linux/stop_machine.h
+index dc0e35d..9914656 100644
+--- a/include/linux/stop_machine.h
++++ b/include/linux/stop_machine.h
+@@ -138,6 +138,8 @@ int stop_machine_from_inactive_cpu(cpu_stop_fn_t fn, void *data,
+ 				   const struct cpumask *cpus);
+ #else	/* CONFIG_SMP || CONFIG_HOTPLUG_CPU */
+ 
++#include <linux/interrupt.h>
++
+ static inline int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data,
+ 					  const struct cpumask *cpus)
+ {
+-- 
+1.9.1
+

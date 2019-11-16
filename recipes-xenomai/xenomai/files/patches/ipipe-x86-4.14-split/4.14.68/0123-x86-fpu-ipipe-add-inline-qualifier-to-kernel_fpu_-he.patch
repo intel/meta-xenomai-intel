@@ -1,0 +1,40 @@
+From 92893117d544f517dfe979c9c432454ab0e2f5fc Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 9 Sep 2018 17:54:16 +0200
+Subject: [PATCH 123/137] x86/fpu: ipipe: add inline qualifier to
+ kernel_fpu_*() helpers
+
+---
+ arch/x86/include/asm/fpu/internal.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/include/asm/fpu/internal.h b/arch/x86/include/asm/fpu/internal.h
+index 5d37b19..9fe2c5d 100644
+--- a/arch/x86/include/asm/fpu/internal.h
++++ b/arch/x86/include/asm/fpu/internal.h
+@@ -606,19 +606,19 @@ static inline void xsetbv(u32 index, u64 value)
+ 
+ DECLARE_PER_CPU(bool, in_kernel_fpu);
+ 
+-static void kernel_fpu_disable(void)
++static inline void kernel_fpu_disable(void)
+ {
+ 	WARN_ON_FPU(this_cpu_read(in_kernel_fpu));
+ 	this_cpu_write(in_kernel_fpu, true);
+ }
+ 
+-static void kernel_fpu_enable(void)
++static inline void kernel_fpu_enable(void)
+ {
+ 	WARN_ON_FPU(!this_cpu_read(in_kernel_fpu));
+ 	this_cpu_write(in_kernel_fpu, false);
+ }
+ 
+-static bool kernel_fpu_disabled(void)
++static inline bool kernel_fpu_disabled(void)
+ {
+ 	return this_cpu_read(in_kernel_fpu);
+ }
+-- 
+1.9.1
+

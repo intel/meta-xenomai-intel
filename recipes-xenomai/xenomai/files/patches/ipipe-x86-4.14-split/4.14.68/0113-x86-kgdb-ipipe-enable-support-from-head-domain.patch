@@ -1,0 +1,30 @@
+From 0c15d97b4295c492c8ad8b5df4bb99b6c9b98ccc Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 13:15:23 +0100
+Subject: [PATCH 113/137] x86/kgdb: ipipe: enable support from head domain
+
+Make sure the KGDB notifier can run over the head domain sanely by
+manipulating the hardware interrupt state (not the virtual one).
+---
+ arch/x86/kernel/kgdb.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kernel/kgdb.c b/arch/x86/kernel/kgdb.c
+index 8e36f24..c9ff690 100644
+--- a/arch/x86/kernel/kgdb.c
++++ b/arch/x86/kernel/kgdb.c
+@@ -598,9 +598,9 @@ int kgdb_ll_trap(int cmd, const char *str,
+ 	unsigned long flags;
+ 	int ret;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	ret = __kgdb_notify(ptr, cmd);
+-	local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ 
+ 	return ret;
+ }
+-- 
+1.9.1
+

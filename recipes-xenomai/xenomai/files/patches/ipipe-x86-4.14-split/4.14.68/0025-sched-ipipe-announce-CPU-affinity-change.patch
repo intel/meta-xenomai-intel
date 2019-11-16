@@ -1,0 +1,37 @@
+From 87c45952f5e1dd3ef4c964e6f59280a1b97dc2f8 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 5 Jul 2018 08:55:08 +0200
+Subject: [PATCH 025/137] sched: ipipe: announce CPU affinity change
+
+Emit IPIPE_KEVT_SETAFFINITY to the co-kernel when the target task is
+about to move to another CPU.
+
+CPU migration can only take place from the root domain, the pipeline
+does not provide any support for migrating tasks from the head domain,
+and derives several key assumptions based on this invariant.
+---
+ kernel/sched/core.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 180faaa..4da6529 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -1130,10 +1130,13 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
+ 	}
+ 
+ 	/* Can the task run on the task's current CPU? If so, we're done */
+-	if (cpumask_test_cpu(task_cpu(p), new_mask))
++	if (cpumask_test_cpu(task_cpu(p), new_mask)) {
++		__ipipe_report_setaffinity(p, task_cpu(p));
+ 		goto out;
++	}
+ 
+ 	dest_cpu = cpumask_any_and(cpu_valid_mask, new_mask);
++	__ipipe_report_setaffinity(p, dest_cpu);
+ 	if (task_running(rq, p) || p->state == TASK_WAKING) {
+ 		struct migration_arg arg = { p, dest_cpu };
+ 		/* Need help from migration thread: drop lock and wait. */
+-- 
+1.9.1
+

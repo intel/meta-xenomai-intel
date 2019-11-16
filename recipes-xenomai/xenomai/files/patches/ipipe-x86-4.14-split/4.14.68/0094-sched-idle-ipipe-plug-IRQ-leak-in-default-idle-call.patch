@@ -1,0 +1,33 @@
+From 7af5d6ddf4f131ef2c69eb6ad8c6cfb688449e77 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 11 Sep 2018 15:36:44 +0200
+Subject: [PATCH 094/137] sched: idle: ipipe: plug IRQ leak in default idle
+ call
+
+---
+ kernel/sched/idle.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/kernel/sched/idle.c b/kernel/sched/idle.c
+index cbc4348..8b9ffcc 100644
+--- a/kernel/sched/idle.c
++++ b/kernel/sched/idle.c
+@@ -98,9 +98,12 @@ void __cpuidle default_idle_call(void)
+ 	if (current_clr_polling_and_test()) {
+ 		local_irq_enable_full();
+ 	} else {
+-		stop_critical_timings();
+-		arch_cpu_idle();
+-		start_critical_timings();
++		if (ipipe_enter_cpuidle(NULL, NULL)) {
++			stop_critical_timings();
++			arch_cpu_idle();
++			start_critical_timings();
++		} else
++			local_irq_enable_full();
+ 	}
+ }
+ 
+-- 
+1.9.1
+

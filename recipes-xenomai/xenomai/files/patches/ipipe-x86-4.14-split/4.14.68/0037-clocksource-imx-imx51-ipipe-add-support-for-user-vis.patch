@@ -1,0 +1,31 @@
+From a83f73a48ef84a115b12a080744c97fe4d18daa3 Mon Sep 17 00:00:00 2001
+From: Gilles Chanteperdrix <gilles.chanteperdrix@xenomai.org>
+Date: Sun, 3 Dec 2017 18:29:21 +0100
+Subject: [PATCH 037/137] clocksource: imx/imx51: ipipe: add support for
+ user-visible TSC
+
+Expose the clocksource to userland processes via the ARM-specific
+user-TSC interface.
+---
+ arch/arm/mach-imx/mach-imx51.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/arch/arm/mach-imx/mach-imx51.c b/arch/arm/mach-imx/mach-imx51.c
+index 3835b6a..6097527 100644
+--- a/arch/arm/mach-imx/mach-imx51.c
++++ b/arch/arm/mach-imx/mach-imx51.c
+@@ -59,6 +59,11 @@ static void __init imx51_dt_init(void)
+ static void __init imx51_init_late(void)
+ {
+ 	mx51_neon_fixup();
++#ifdef CONFIG_IPIPE
++	/* Allow user-space access to emulated tsc */
++	imx_set_aips(IMX_IO_ADDRESS(0x73f00000));
++	imx_set_aips(IMX_IO_ADDRESS(0x83f00000));
++#endif
+ 	imx51_pm_init();
+ }
+ 
+-- 
+1.9.1
+

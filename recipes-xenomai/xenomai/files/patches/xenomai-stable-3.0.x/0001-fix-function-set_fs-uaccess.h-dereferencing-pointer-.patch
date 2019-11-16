@@ -1,0 +1,29 @@
+From 60a3b609316ba7ea0941dd041888db06cae5d7e6 Mon Sep 17 00:00:00 2001
+From: florent pirou <florent.pirou@intel.com>
+Date: Thu, 6 Dec 2018 00:57:33 +0100
+Subject: [PATCH] =?UTF-8?q?fix=20function=20=E2=80=98set=5Ffs=E2=80=99=20u?=
+ =?UTF-8?q?access.h=20dereferencing=20pointer=20compile=20issue?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: florent pirou <florent.pirou@intel.com>
+---
+ kernel/cobalt/include/asm-generic/xenomai/syscall.h | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/kernel/cobalt/include/asm-generic/xenomai/syscall.h b/kernel/cobalt/include/asm-generic/xenomai/syscall.h
+index 7909fc3..de7e2fc 100644
+--- a/kernel/cobalt/include/asm-generic/xenomai/syscall.h
++++ b/kernel/cobalt/include/asm-generic/xenomai/syscall.h
+@@ -20,7 +20,6 @@
+ #define _COBALT_ASM_GENERIC_SYSCALL_H
+ 
+ #include <linux/types.h>
+-#include <linux/version.h>
+ #include <linux/uaccess.h>
+ #include <asm/xenomai/features.h>
+ #include <asm/xenomai/wrappers.h>
+-- 
+1.9.1
+

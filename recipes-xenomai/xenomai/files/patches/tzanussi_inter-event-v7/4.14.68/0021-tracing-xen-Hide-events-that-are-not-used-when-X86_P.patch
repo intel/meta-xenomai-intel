@@ -1,0 +1,92 @@
+From 4ae52fda3981d9f26f45adb4616df2ce54c7c004 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Tue, 10 Oct 2017 19:12:56 -0400
+Subject: [PATCH 21/66] tracing/xen: Hide events that are not used when X86_PAE
+ is not defined
+
+TRACE_EVENTS() take up memory. If they are defined but not used, then
+they simply waste space. If their use case is behind a define, then the
+trace events should be as well.
+
+The trace events xen_mmu_set_pte_atomic, xen_mmu_pte_clear, and
+xen_mmu_pmd_clear are not used when CONFIG_X86_PAE is not defined.
+
+Link: http://lkml.kernel.org/r/20171010191256.3d6d72cb@gandalf.local.home
+
+Reviewed-by: Boris Ostrovsky <boris.ostrovsky@oracle.com>
+Reviewed-by: Jeremy Linton <jeremy.linton@arm.com>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/trace/events/xen.h | 35 +++++++++++++++++++----------------
+ 1 file changed, 19 insertions(+), 16 deletions(-)
+
+diff --git a/include/trace/events/xen.h b/include/trace/events/xen.h
+index 2ec9064..fdcf88b 100644
+--- a/include/trace/events/xen.h
++++ b/include/trace/events/xen.h
+@@ -148,7 +148,6 @@
+ 		     TP_ARGS(ptep, pteval))
+ 
+ DEFINE_XEN_MMU_SET_PTE(xen_mmu_set_pte);
+-DEFINE_XEN_MMU_SET_PTE(xen_mmu_set_pte_atomic);
+ 
+ TRACE_EVENT(xen_mmu_set_pte_at,
+ 	    TP_PROTO(struct mm_struct *mm, unsigned long addr,
+@@ -170,21 +169,6 @@
+ 		      (int)sizeof(pteval_t) * 2, (unsigned long long)__entry->pteval)
+ 	);
+ 
+-TRACE_EVENT(xen_mmu_pte_clear,
+-	    TP_PROTO(struct mm_struct *mm, unsigned long addr, pte_t *ptep),
+-	    TP_ARGS(mm, addr, ptep),
+-	    TP_STRUCT__entry(
+-		    __field(struct mm_struct *, mm)
+-		    __field(unsigned long, addr)
+-		    __field(pte_t *, ptep)
+-		    ),
+-	    TP_fast_assign(__entry->mm = mm;
+-			   __entry->addr = addr;
+-			   __entry->ptep = ptep),
+-	    TP_printk("mm %p addr %lx ptep %p",
+-		      __entry->mm, __entry->addr, __entry->ptep)
+-	);
+-
+ TRACE_DEFINE_SIZEOF(pmdval_t);
+ 
+ TRACE_EVENT(xen_mmu_set_pmd,
+@@ -202,6 +186,24 @@
+ 		      (int)sizeof(pmdval_t) * 2, (unsigned long long)__entry->pmdval)
+ 	);
+ 
++#ifdef CONFIG_X86_PAE
++DEFINE_XEN_MMU_SET_PTE(xen_mmu_set_pte_atomic);
++
++TRACE_EVENT(xen_mmu_pte_clear,
++	    TP_PROTO(struct mm_struct *mm, unsigned long addr, pte_t *ptep),
++	    TP_ARGS(mm, addr, ptep),
++	    TP_STRUCT__entry(
++		    __field(struct mm_struct *, mm)
++		    __field(unsigned long, addr)
++		    __field(pte_t *, ptep)
++		    ),
++	    TP_fast_assign(__entry->mm = mm;
++			   __entry->addr = addr;
++			   __entry->ptep = ptep),
++	    TP_printk("mm %p addr %lx ptep %p",
++		      __entry->mm, __entry->addr, __entry->ptep)
++	);
++
+ TRACE_EVENT(xen_mmu_pmd_clear,
+ 	    TP_PROTO(pmd_t *pmdp),
+ 	    TP_ARGS(pmdp),
+@@ -211,6 +213,7 @@
+ 	    TP_fast_assign(__entry->pmdp = pmdp),
+ 	    TP_printk("pmdp %p", __entry->pmdp)
+ 	);
++#endif
+ 
+ #if CONFIG_PGTABLE_LEVELS >= 4
+ 
+-- 
+1.9.1
+

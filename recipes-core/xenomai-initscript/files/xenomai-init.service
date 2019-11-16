@@ -1,0 +1,6 @@
+[Unit]
+Description=start initscript upon first boot
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'sleep 2 ; /usr/sbin/xenomai-initscript.sh'

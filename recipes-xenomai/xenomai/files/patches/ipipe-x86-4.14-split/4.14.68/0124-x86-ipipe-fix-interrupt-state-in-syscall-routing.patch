@@ -1,0 +1,263 @@
+From 509c2101555f8a516f49f7c4a7471d0774472aba Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 9 Sep 2018 18:00:23 +0200
+Subject: [PATCH 124/137] x86: ipipe: fix interrupt state in syscall routing
+
+---
+ arch/x86/entry/common.c | 147 ++++++++++++++++++++++--------------------------
+ 1 file changed, 66 insertions(+), 81 deletions(-)
+
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index c75d32d..c27b10d 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -47,6 +47,22 @@ __visible inline void enter_from_user_mode(void)
+ static inline void enter_from_user_mode(void) {}
+ #endif
+ 
++#ifdef CONFIG_IPIPE
++#define disable_local_irqs()	do {	\
++	hard_local_irq_disable();	\
++	trace_hardirqs_off();		\
++} while (0)
++#define enable_local_irqs()	do {	\
++	trace_hardirqs_on();		\
++	hard_local_irq_enable();	\
++} while (0)
++#define check_irqs_disabled()	hard_irqs_disabled()
++#else
++#define disable_local_irqs()	local_irq_disable()
++#define enable_local_irqs()	local_irq_enable()
++#define check_irqs_disabled()	irqs_disabled()
++#endif
++
+ static void do_audit_syscall_entry(struct pt_regs *regs, u32 arch)
+ {
+ #ifdef CONFIG_X86_64
+@@ -147,7 +163,7 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+ 	 */
+ 	while (true) {
+ 		/* We have work to do. */
+-		local_irq_enable();	/* IPIPE: hardirqs on too */
++		enable_local_irqs();
+ 
+ 		if (cached_flags & _TIF_NEED_RESCHED)
+ 			schedule();
+@@ -171,9 +187,7 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+ 			klp_update_patch_state(current);
+ 
+ 		/* Disable IRQs and retry */
+-		local_irq_disable();
+-
+-		hard_cond_local_irq_disable();
++		disable_local_irqs();
+ 
+ 		cached_flags = READ_ONCE(current_thread_info()->flags);
+ 
+@@ -187,17 +201,11 @@ __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
+ {
+ 	struct thread_info *ti = current_thread_info();
+ 	u32 cached_flags;
+-#ifdef CONFIG_IPIPE
+-	unsigned long flags;
+-
+-	local_irq_save(flags);
+-	hard_local_irq_enable();
+-#endif
+ 
+ 	addr_limit_user_check();
+ 
+-	if (IS_ENABLED(CONFIG_PROVE_LOCKING) && WARN_ON(!irqs_disabled()))
+-		local_irq_disable();
++	if (IS_ENABLED(CONFIG_PROVE_LOCKING) && WARN_ON(!check_irqs_disabled()))
++		disable_local_irqs();
+ 
+ 	lockdep_sys_exit();
+ 
+@@ -222,11 +230,6 @@ __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
+ #endif
+ 
+ 	user_enter_irqoff();
+-
+-#ifdef CONFIG_IPIPE
+-	local_irq_restore(flags);
+-	hard_local_irq_disable();
+-#endif
+ }
+ 
+ #define SYSCALL_EXIT_WORK_FLAGS				\
+@@ -267,8 +270,8 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
+ 	CT_WARN_ON(ct_state() != CONTEXT_KERNEL);
+ 
+ 	if (IS_ENABLED(CONFIG_PROVE_LOCKING) &&
+-	    WARN(irqs_disabled(), "syscall %ld left IRQs disabled", regs->orig_ax))
+-		local_irq_enable();
++	    WARN(check_irqs_disabled(), "syscall %ld left IRQs disabled", regs->orig_ax))
++		enable_local_irqs();
+ 
+ 	/*
+ 	 * First do one-time work.  If these work items are enabled, we
+@@ -279,60 +282,10 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
+ 		     (cached_flags & SYSCALL_EXIT_WORK_FLAGS)))
+ 		syscall_slow_exit_work(regs, cached_flags);
+ 
+-	local_irq_disable();
+-	hard_cond_local_irq_disable();
++	disable_local_irqs();
+ 	prepare_exit_to_usermode(regs);
+ }
+ 
+-#ifdef CONFIG_IPIPE
+-
+-#ifdef CONFIG_X86_32
+-static inline int pipeline_syscall_32(struct thread_info *ti,
+-				   unsigned long nr, struct pt_regs *regs)
+-{
+-	return ipipe_handle_syscall(ti, nr, regs);
+-}
+-#else
+-static inline int pipeline_syscall_64(struct thread_info *ti,
+-				   unsigned long nr, struct pt_regs *regs)
+-{
+-	return ipipe_handle_syscall(ti, nr, regs);
+-}
+-
+-static inline int pipeline_syscall_32(struct thread_info *ti,
+-				   unsigned long nr, struct pt_regs *regs)
+-{
+-	struct pt_regs regs64 = *regs;
+-	int ret;
+-
+-	regs64.di = (unsigned int)regs->bx;
+-	regs64.si = (unsigned int)regs->cx;
+-	regs64.r10 = (unsigned int)regs->si;
+-	regs64.r8 = (unsigned int)regs->di;
+-	regs64.r9 = (unsigned int)regs->bp;
+-	ret = ipipe_handle_syscall(ti, nr, &regs64);
+-	regs->ax = (unsigned int)regs64.ax;
+-
+-	return ret;
+-}
+-#endif /* CONFIG_X86_32 */
+-
+-#else  /* CONFIG_IPIPE */
+-
+-static inline int pipeline_syscall_32(struct thread_info *ti,
+-				   unsigned long nr, struct pt_regs *regs)
+-{
+-	return 0;
+-}
+-
+-static inline int pipeline_syscall_64(struct thread_info *ti,
+-				   unsigned long nr, struct pt_regs *regs)
+-{
+-	return 0;
+-}
+-
+-#endif /* CONFIG_IPIPE */
+-
+ #ifdef CONFIG_X86_64
+ __visible void do_syscall_64(struct pt_regs *regs)
+ {
+@@ -341,12 +294,11 @@ __visible void do_syscall_64(struct pt_regs *regs)
+ 	int ret;
+ 
+ 	enter_from_user_mode();
+-	local_irq_enable();
++	enable_local_irqs();
+ 
+-	ret = pipeline_syscall_64(ti, nr, regs);
++	ret = ipipe_handle_syscall(ti, nr & __SYSCALL_MASK, regs);
+ 	if (ret > 0) {
+-		local_irq_disable();
+-		hard_cond_local_irq_disable();
++		disable_local_irqs();
+ 		return;
+ 	}
+ 	if (ret < 0)
+@@ -372,6 +324,39 @@ __visible void do_syscall_64(struct pt_regs *regs)
+ #endif
+ 
+ #if defined(CONFIG_X86_32) || defined(CONFIG_IA32_EMULATION)
++
++#ifdef CONFIG_IPIPE
++#ifdef CONFIG_X86_32
++static inline int pipeline_syscall(struct thread_info *ti,
++				   unsigned long nr, struct pt_regs *regs)
++{
++	return ipipe_handle_syscall(ti, nr, regs);
++}
++#else
++static inline int pipeline_syscall(struct thread_info *ti,
++				   unsigned long nr, struct pt_regs *regs)
++{
++	struct pt_regs regs64 = *regs;
++	int ret;
++
++	regs64.di = (unsigned int)regs->bx;
++	regs64.si = (unsigned int)regs->cx;
++	regs64.r10 = (unsigned int)regs->si;
++	regs64.r8 = (unsigned int)regs->di;
++	regs64.r9 = (unsigned int)regs->bp;
++	ret = ipipe_handle_syscall(ti, nr, &regs64);
++	regs->ax = (unsigned int)regs64.ax;
++
++	return ret;
++}
++#endif /* CONFIG_X86_32 */
++#else  /* CONFIG_IPIPE */
++static inline int pipeline_syscall(struct thread_info *ti,
++				   unsigned long nr, struct pt_regs *regs)
++{
++	return 0;
++}
++#endif /* CONFIG_IPIPE */
+ /*
+  * Does a 32-bit syscall.  Called with IRQs on in CONTEXT_KERNEL.  Does
+  * all entry and exit work and returns with IRQs off.  This function is
+@@ -388,10 +373,11 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs)
+ 	ti->status |= TS_COMPAT;
+ #endif
+ 
+-	ret = pipeline_syscall_32(ti, nr, regs);
+-	if (ret > 0)
++	ret = pipeline_syscall(ti, nr, regs);
++	if (ret > 0) {
++		disable_local_irqs();
+ 		return;
+-
++	}
+ 	if (ret < 0)
+ 		goto done;
+ 
+@@ -426,7 +412,7 @@ static __always_inline void do_syscall_32_irqs_on(struct pt_regs *regs)
+ __visible void do_int80_syscall_32(struct pt_regs *regs)
+ {
+ 	enter_from_user_mode();
+-	local_irq_enable();	/* IPIPE: hardirqs on too */
++	enable_local_irqs();
+ 	do_syscall_32_irqs_on(regs);
+ }
+ 
+@@ -450,7 +436,7 @@ __visible long do_fast_syscall_32(struct pt_regs *regs)
+ 
+ 	enter_from_user_mode();
+ 
+-	local_irq_enable();	/* IPIPE: hardirqs on too */
++	enable_local_irqs();
+ 
+ 	/* Fetch EBP from where the vDSO stashed it. */
+ 	if (
+@@ -468,8 +454,7 @@ __visible long do_fast_syscall_32(struct pt_regs *regs)
+ 		) {
+ 
+ 		/* User code screwed up. */
+-		local_irq_disable();
+-		hard_cond_local_irq_disable();
++		disable_local_irqs();
+ 		regs->ax = -EFAULT;
+ 		prepare_exit_to_usermode(regs);
+ 		return 0;	/* Keep it simple: use IRET. */
+-- 
+1.9.1
+

@@ -1,0 +1,46 @@
+From ff46f279bf6d9046c7f5e39d3c15662be1c5169b Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:15:01 +0100
+Subject: [PATCH 065/137] irqchip: atmel/aic5: enable interrupt pipelining
+
+Fix up ATMEL's AIC5 interrupt controller driver in order to channel
+interrupts through the interrupt pipeline.
+---
+ drivers/irqchip/irq-atmel-aic5.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/irqchip/irq-atmel-aic5.c b/drivers/irqchip/irq-atmel-aic5.c
+index 699a7be..4bbdd31 100644
+--- a/drivers/irqchip/irq-atmel-aic5.c
++++ b/drivers/irqchip/irq-atmel-aic5.c
+@@ -194,6 +194,7 @@ static void aic5_suspend(struct irq_data *d)
+ 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
+ 	int i;
+ 	u32 mask;
++	unsigned long flags;
+ 
+ 	if (smr_cache)
+ 		for (i = 0; i < domain->revmap_size; i++) {
+@@ -201,7 +202,7 @@ static void aic5_suspend(struct irq_data *d)
+ 			smr_cache[i] = irq_reg_readl(bgc, AT91_AIC5_SMR);
+ 		}
+ 
+-	irq_gc_lock(bgc);
++	flags = irq_gc_lock(bgc);
+ 	for (i = 0; i < dgc->irqs_per_chip; i++) {
+ 		mask = 1 << i;
+ 		if ((mask & gc->mask_cache) == (mask & gc->wake_active))
+@@ -224,8 +225,9 @@ static void aic5_resume(struct irq_data *d)
+ 	struct irq_chip_generic *gc = irq_data_get_irq_chip_data(d);
+ 	int i;
+ 	u32 mask;
++	unsigned long flags;
+ 
+-	irq_gc_lock(bgc);
++	flags = irq_gc_lock(bgc);
+ 
+ 	if (smr_cache) {
+ 		irq_reg_writel(bgc, 0xffffffff, AT91_AIC5_SPU);
+-- 
+1.9.1
+

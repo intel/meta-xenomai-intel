@@ -1,0 +1,98 @@
+From dd4ef3491c45db546e2353f3382e62cba3ae687a Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 17 Jul 2018 16:33:27 +0200
+Subject: [PATCH 080/137] lockdep: ipipe: make the logic aware of interrupt
+ pipelining
+
+The lockdep engine will check for the current interrupt state as part
+of the locking validation process, which must encompass:
+
+- the CPU interrupt state
+- the current pipeline domain
+- the virtual interrupt disable flag
+
+so that we can traverse the tracepoints from any context sanely and
+safely.
+
+In addition trace_hardirqs_on_virt_caller() should be called by the
+arch-dependent code when tracking the interrupt state before returning
+to user-space after a kernel entry (exceptions, IRQ). This makes sure
+that the tracking logic only applies to the root domain, and considers
+the virtual disable flag exclusively.
+
+For instance, the kernel may be entered when interrupts are (only)
+virtually disabled for the root domain (i.e. stalled), and we should
+tell the IRQ tracing logic that IRQs are about to be enabled back only
+if the root domain is unstalled before leaving to user-space. In such
+a context, the state of the interrupt bit in the CPU would be
+irrelevant.
+
+Conflicts:
+	kernel/trace/trace_irqsoff.c
+---
+ kernel/locking/lockdep.c           | 11 +++++++++++
+ kernel/locking/lockdep_internals.h |  4 ++--
+ kernel/trace/trace_irqsoff.c       |  6 ++++++
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/locking/lockdep.c b/kernel/locking/lockdep.c
+index 4dd8ed7..52369f9 100644
+--- a/kernel/locking/lockdep.c
++++ b/kernel/locking/lockdep.c
+@@ -2931,6 +2931,17 @@ __visible void trace_hardirqs_on_caller(unsigned long ip)
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on_caller);
+ 
++__visible void trace_hardirqs_on_virt_caller(unsigned long ip)
++{
++	/*
++	 * The IRQ tracing logic only applies to the root domain, and
++	 * must consider the virtual disable flag exclusively when
++	 * leaving an interrupt/fault context.
++	 */
++	if (ipipe_root_p && !raw_irqs_disabled())
++		trace_hardirqs_on_caller(ip);
++}
++
+ void trace_hardirqs_on(void)
+ {
+ 	trace_hardirqs_on_caller(CALLER_ADDR0);
+diff --git a/kernel/locking/lockdep_internals.h b/kernel/locking/lockdep_internals.h
+index d459d62..b3f17a8 100644
+--- a/kernel/locking/lockdep_internals.h
++++ b/kernel/locking/lockdep_internals.h
+@@ -160,12 +160,12 @@ struct lockdep_stats {
+ 	this_cpu_inc(lockdep_stats.ptr);
+ 
+ #define debug_atomic_inc(ptr)			{		\
+-	WARN_ON_ONCE(!irqs_disabled());				\
++	WARN_ON_ONCE(!hard_irqs_disabled() && !irqs_disabled()); \
+ 	__this_cpu_inc(lockdep_stats.ptr);			\
+ }
+ 
+ #define debug_atomic_dec(ptr)			{		\
+-	WARN_ON_ONCE(!irqs_disabled());				\
++	WARN_ON_ONCE(!hard_irqs_disabled() && !irqs_disabled());\
+ 	__this_cpu_dec(lockdep_stats.ptr);			\
+ }
+ 
+diff --git a/kernel/trace/trace_irqsoff.c b/kernel/trace/trace_irqsoff.c
+index 4f0e324..1ccb33c 100644
+--- a/kernel/trace/trace_irqsoff.c
++++ b/kernel/trace/trace_irqsoff.c
+@@ -487,6 +487,12 @@ static inline void tracer_hardirqs_on_caller(unsigned long caller_addr)
+ 		stop_critical_timing(CALLER_ADDR0, caller_addr);
+ }
+ 
++static inline void trace_hardirqs_on_virt_caller(unsigned long caller_addr)
++{
++	if (ipipe_root_p && !raw_irqs_disabled())
++		trace_hardirqs_on_caller(caller_addr);
++}
++
+ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr)
+ {
+ 	if (ipipe_root_p && !preempt_trace() && irq_trace())
+-- 
+1.9.1
+

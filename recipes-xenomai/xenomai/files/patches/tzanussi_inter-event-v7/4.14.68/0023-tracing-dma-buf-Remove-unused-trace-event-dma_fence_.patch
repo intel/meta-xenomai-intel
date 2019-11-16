@@ -1,0 +1,92 @@
+From b4b19f3d6294e5246a8b392fb50ede3d19530a10 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Fri, 13 Oct 2017 10:06:25 -0400
+Subject: [PATCH 23/66] tracing, dma-buf: Remove unused trace event
+ dma_fence_annotate_wait_on
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Commit e941759c74 ("fence: dma-buf cross-device synchronization") added
+trace event fence_annotate_wait_on, but never used it. It was renamed
+to dma_fence_annotate_wait_on by commit f54d186700 ("dma-buf: Rename
+struct fence to dma_fence") but still not used. As defined trace events
+have data structures and functions created for them, it is a waste of
+memory if they are not used. Remove the unused trace event.
+
+Link: http://lkml.kernel.org/r/20171013100625.6c820059@gandalf.local.home
+
+Reviewed-by: Christian König <christian.koenig@amd.com>
+Acked-by: Sumit Semwal <sumit.semwal@linaro.org>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ drivers/dma-buf/dma-fence.c      |  1 -
+ include/trace/events/dma_fence.h | 40 ----------------------------------------
+ 2 files changed, 41 deletions(-)
+
+diff --git a/drivers/dma-buf/dma-fence.c b/drivers/dma-buf/dma-fence.c
+index 9a30279..5d101c4 100644
+--- a/drivers/dma-buf/dma-fence.c
++++ b/drivers/dma-buf/dma-fence.c
+@@ -27,7 +27,6 @@
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/dma_fence.h>
+ 
+-EXPORT_TRACEPOINT_SYMBOL(dma_fence_annotate_wait_on);
+ EXPORT_TRACEPOINT_SYMBOL(dma_fence_emit);
+ EXPORT_TRACEPOINT_SYMBOL(dma_fence_enable_signal);
+ 
+diff --git a/include/trace/events/dma_fence.h b/include/trace/events/dma_fence.h
+index d61bfdd..2212add 100644
+--- a/include/trace/events/dma_fence.h
++++ b/include/trace/events/dma_fence.h
+@@ -9,46 +9,6 @@
+ 
+ struct dma_fence;
+ 
+-TRACE_EVENT(dma_fence_annotate_wait_on,
+-
+-	/* fence: the fence waiting on f1, f1: the fence to be waited on. */
+-	TP_PROTO(struct dma_fence *fence, struct dma_fence *f1),
+-
+-	TP_ARGS(fence, f1),
+-
+-	TP_STRUCT__entry(
+-		__string(driver, fence->ops->get_driver_name(fence))
+-		__string(timeline, fence->ops->get_timeline_name(fence))
+-		__field(unsigned int, context)
+-		__field(unsigned int, seqno)
+-
+-		__string(waiting_driver, f1->ops->get_driver_name(f1))
+-		__string(waiting_timeline, f1->ops->get_timeline_name(f1))
+-		__field(unsigned int, waiting_context)
+-		__field(unsigned int, waiting_seqno)
+-	),
+-
+-	TP_fast_assign(
+-		__assign_str(driver, fence->ops->get_driver_name(fence))
+-		__assign_str(timeline, fence->ops->get_timeline_name(fence))
+-		__entry->context = fence->context;
+-		__entry->seqno = fence->seqno;
+-
+-		__assign_str(waiting_driver, f1->ops->get_driver_name(f1))
+-		__assign_str(waiting_timeline, f1->ops->get_timeline_name(f1))
+-		__entry->waiting_context = f1->context;
+-		__entry->waiting_seqno = f1->seqno;
+-
+-	),
+-
+-	TP_printk("driver=%s timeline=%s context=%u seqno=%u "	\
+-		  "waits on driver=%s timeline=%s context=%u seqno=%u",
+-		  __get_str(driver), __get_str(timeline), __entry->context,
+-		  __entry->seqno,
+-		  __get_str(waiting_driver), __get_str(waiting_timeline),
+-		  __entry->waiting_context, __entry->waiting_seqno)
+-);
+-
+ DECLARE_EVENT_CLASS(dma_fence,
+ 
+ 	TP_PROTO(struct dma_fence *fence),
+-- 
+1.9.1
+

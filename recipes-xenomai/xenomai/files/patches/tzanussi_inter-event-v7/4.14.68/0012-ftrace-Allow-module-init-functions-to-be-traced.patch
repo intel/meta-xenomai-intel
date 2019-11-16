@@ -1,0 +1,85 @@
+From 2114394fc5cf105b61c9e4e92623e0afa16413c8 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Fri, 3 Mar 2017 18:00:22 -0500
+Subject: [PATCH 12/66] ftrace: Allow module init functions to be traced
+
+Allow for module init sections to be traced as well as core kernel init
+sections. Now that filtering modules functions can be stored, for when they
+are loaded, it makes sense to be able to trace them.
+
+Cc: Jessica Yu <jeyu@kernel.org>
+Cc: Rusty Russell <rusty@rustcorp.com.au>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+
+Conflicts:
+	include/linux/init.h
+---
+ include/linux/init.h  | 4 +---
+ kernel/module.c       | 2 ++
+ kernel/trace/ftrace.c | 6 ++++--
+ 3 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/init.h b/include/linux/init.h
+index 07cab8a..bc27cf0 100644
+--- a/include/linux/init.h
++++ b/include/linux/init.h
+@@ -47,7 +47,7 @@
+ 
+ /* These are for everybody (although not all archs will actually
+    discard it in modules) */
+-#define __init		__section(.init.text) __cold __inittrace __latent_entropy __noinitretpoline
++#define __init		__section(.init.text) __cold  __latent_entropy __noinitretpoline
+ #define __initdata	__section(.init.data)
+ #define __initconst	__section(.init.rodata)
+ #define __exitdata	__section(.exit.data)
+@@ -76,10 +76,8 @@
+ 
+ #ifdef MODULE
+ #define __exitused
+-#define __inittrace notrace
+ #else
+ #define __exitused  __used
+-#define __inittrace
+ #endif
+ 
+ #define __exit          __section(.exit.text) __exitused __cold notrace
+diff --git a/kernel/module.c b/kernel/module.c
+index 321b0b1..06acd62 100644
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -3484,6 +3484,8 @@ static noinline int do_init_module(struct module *mod)
+ 	if (!mod->async_probe_requested && (current->flags & PF_USED_ASYNC))
+ 		async_synchronize_full();
+ 
++	ftrace_free_mem(mod->init_layout.base, mod->init_layout.base +
++			mod->init_layout.size);
+ 	mutex_lock(&module_mutex);
+ 	/* Drop initial reference. */
+ 	module_put(mod);
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index 580348c..ee31fde 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -5748,7 +5748,8 @@ void ftrace_release_mod(struct module *mod)
+ 	last_pg = &ftrace_pages_start;
+ 	for (pg = ftrace_pages_start; pg; pg = *last_pg) {
+ 		rec = &pg->records[0];
+-		if (within_module_core(rec->ip, mod)) {
++		if (within_module_core(rec->ip, mod) ||
++		    within_module_init(rec->ip, mod)) {
+ 			/*
+ 			 * As core pages are first, the first
+ 			 * page should never be a module page.
+@@ -5817,7 +5818,8 @@ void ftrace_module_enable(struct module *mod)
+ 		 * not part of this module, then skip this pg,
+ 		 * which the "break" will do.
+ 		 */
+-		if (!within_module_core(rec->ip, mod))
++		if (!within_module_core(rec->ip, mod) &&
++		    !within_module_init(rec->ip, mod))
+ 			break;
+ 
+ 		cnt = 0;
+-- 
+1.9.1
+

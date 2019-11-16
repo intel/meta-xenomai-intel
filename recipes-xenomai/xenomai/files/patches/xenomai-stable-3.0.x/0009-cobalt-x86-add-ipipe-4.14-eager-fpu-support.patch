@@ -1,0 +1,98 @@
+From 696dc860de8c99a1b6ad2e86740c439058f41cd0 Mon Sep 17 00:00:00 2001
+From: Henning Schild <henning.schild@siemens.com>
+Date: Fri, 14 Sep 2018 17:10:18 +0200
+Subject: [PATCH 09/21] cobalt/x86: add ipipe-4.14 eager fpu support
+
+4.14 is always eager, unfortunately we will need a few ifdefs inside the
+eager fpu support as well.
+
+Signed-off-by: Henning Schild <henning.schild@siemens.com>
+[Jan: converted C++-style comment]
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ .../cobalt/arch/x86/include/asm/xenomai/wrappers.h  |  4 ++++
+ kernel/cobalt/arch/x86/thread.c                     | 21 ++++++++++++++++++++-
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h b/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
+index a477301..a4cc368 100644
+--- a/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
++++ b/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
+@@ -32,6 +32,10 @@
+     LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ #define IPIPE_X86_FPU_EAGER
+ #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
++#define IPIPE_X86_FPU_EAGER
++#endif
++
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+ #include <asm/i387.h>
+diff --git a/kernel/cobalt/arch/x86/thread.c b/kernel/cobalt/arch/x86/thread.c
+index ecfdb2d..a095600 100644
+--- a/kernel/cobalt/arch/x86/thread.c
++++ b/kernel/cobalt/arch/x86/thread.c
+@@ -42,6 +42,7 @@ static struct kmem_cache *xstate_cache;
+ #define cpu_has_xsave boot_cpu_has(X86_FEATURE_XSAVE)
+ #endif
+ 
++#ifndef IPIPE_X86_FPU_EAGER
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+ #include <asm/i387.h>
+ #include <asm/fpu-internal.h>
+@@ -72,6 +73,9 @@ static inline void x86_fpregs_activate(struct task_struct *t)
+ #define x86_xstate_alignment		__alignof__(union fpregs_state)
+ 
+ #endif
++#else /* IPIPE_X86_FPU_EAGER */
++#define x86_xstate_alignment		__alignof__(union fpregs_state)
++#endif /* ! IPIPE_X86_FPU_EAGER */
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4,8,0)
+ /*
+@@ -465,9 +469,15 @@ void xnarch_leave_root(struct xnthread *root)
+ 	/* save fpregs from in-kernel use */
+ 	copy_fpregs_to_fpstate(rootcb->kfpu);
+ 	kernel_fpu_enable();
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
++	/* restore current's fpregs */
++	__cpu_invalidate_fpregs_state();
++	switch_fpu_finish(&current->thread.fpu, smp_processor_id());
++#else
+ 	/* mark current thread as not owning the FPU anymore */
+ 	if (&current->thread.fpu.fpstate_active)
+ 		fpregs_deactivate(&current->thread.fpu);
++#endif
+ }
+ 
+ void xnarch_switch_fpu(struct xnthread *from, struct xnthread *to)
+@@ -528,7 +538,11 @@ void xnarch_init_shadow_tcb(struct xnthread *thread)
+ #else /* IPIPE_X86_FPU_EAGER */
+ 	/* XNFPU is always set */
+ 	xnthread_set_state(thread, XNFPU);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+ 	fpu__activate_fpstate_read(&p->thread.fpu);
++#else
++	fpu__initialize(&p->thread.fpu);
++#endif
+ #endif /* ! IPIPE_X86_FPU_EAGER */
+ }
+ 
+@@ -537,7 +551,12 @@ int mach_x86_thread_init(void)
+ 	xstate_cache = kmem_cache_create("cobalt_x86_xstate",
+ 					 fpu_kernel_xstate_size,
+ 					 x86_xstate_alignment,
+-					 SLAB_NOTRACK, NULL);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
++					 SLAB_NOTRACK,
++#else
++					 0,
++#endif
++					 NULL);
+ 	if (xstate_cache == NULL)
+ 		return -ENOMEM;
+ 
+-- 
+1.9.1
+

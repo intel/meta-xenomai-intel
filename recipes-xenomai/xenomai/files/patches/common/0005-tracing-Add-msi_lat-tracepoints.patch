@@ -1,0 +1,104 @@
+From 9c8d7bebb0a92f7df8457a44773af32727ad7f80 Mon Sep 17 00:00:00 2001
+From: Tom Zanussi <tom.zanussi@linux.intel.com>
+Date: Fri, 22 Jun 2018 08:41:45 -0500
+Subject: [PATCH 5/6] tracing: Add msi_lat tracepoints
+
+For testing msi_lat benchmark module.
+
+Signed-off-by: Tom Zanussi <tom.zanussi@linux.intel.com>
+---
+ include/trace/events/msi_lat.h   | 64 ++++++++++++++++++++++++++++++++++++++++
+ kernel/trace/trace_events_hist.c |  6 ++++
+ 2 files changed, 70 insertions(+)
+ create mode 100644 include/trace/events/msi_lat.h
+
+diff --git a/include/trace/events/msi_lat.h b/include/trace/events/msi_lat.h
+new file mode 100644
+index 0000000..e3fd9fc
+--- /dev/null
++++ b/include/trace/events/msi_lat.h
+@@ -0,0 +1,64 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM msi_lat
++
++#if !defined(_TRACE_MSI_LAT_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_MSI_LAT_H
++
++#include <linux/tracepoint.h>
++
++TRACE_EVENT(msi_lat_samp0,
++	    TP_PROTO(int irq),
++	    TP_ARGS(irq),
++
++	    TP_STRUCT__entry(
++			     __field(int, irq)
++			     ),
++
++	    TP_fast_assign(
++			   __entry->irq = irq;
++			   ),
++
++	    TP_printk("irq=%d",
++		      __entry->irq)
++);
++
++TRACE_EVENT(msi_lat_samp1,
++	    TP_PROTO(int irq),
++	    TP_ARGS(irq),
++
++	    TP_STRUCT__entry(
++			     __field(int, irq)
++			     ),
++
++	    TP_fast_assign(
++			   __entry->irq = irq;
++			   ),
++
++	    TP_printk("irq=%d",
++		      __entry->irq)
++);
++
++TRACE_EVENT(msi_lat,
++	    TP_PROTO(int irq, unsigned long duration),
++	    TP_ARGS(irq, duration),
++
++	    TP_STRUCT__entry(
++			     __field(int, irq)
++			     __field(unsigned long, duration)
++			     ),
++
++	    TP_fast_assign(
++			   __entry->irq = irq;
++			   __entry->duration = duration;
++			   ),
++
++	    TP_printk("irq=%d, duration=%lu",
++		      __entry->irq,
++		      __entry->duration)
++);
++
++#endif /* _TRACE_MSI_LAT_H */
++
++/* This part must be outside protection */
++#include <trace/define_trace.h>
+diff --git a/kernel/trace/trace_events_hist.c b/kernel/trace/trace_events_hist.c
+index b0b10f3..b5f11b8 100644
+--- a/kernel/trace/trace_events_hist.c
++++ b/kernel/trace/trace_events_hist.c
+@@ -22,6 +22,12 @@
+ #include <linux/rculist.h>
+ #include <linux/tracefs.h>
+ 
++#define CREATE_TRACE_POINTS
++#include <trace/events/msi_lat.h>
++EXPORT_TRACEPOINT_SYMBOL(msi_lat);
++EXPORT_TRACEPOINT_SYMBOL(msi_lat_samp0);
++EXPORT_TRACEPOINT_SYMBOL(msi_lat_samp1);
++
+ #include "tracing_map.h"
+ #include "trace.h"
+ 
+-- 
+1.9.1
+

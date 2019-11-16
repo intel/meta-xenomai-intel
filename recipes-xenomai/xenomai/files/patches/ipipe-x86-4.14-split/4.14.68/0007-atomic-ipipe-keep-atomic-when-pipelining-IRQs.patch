@@ -1,0 +1,227 @@
+From 077c297ddaf853fe6543743a13b7023511b439d2 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:12:25 +0200
+Subject: [PATCH 007/137] atomic: ipipe: keep atomic when pipelining IRQs
+
+Because of the virtualization of interrupt masking for the regular
+kernel code when the pipeline is enabled, atomic helpers relying on
+common interrupt disabling helpers such as local_irq_save/restore
+pairs would not be atomic anymore, leading to data corruption.
+
+This commit restores true atomicity for the atomic helpers that would
+be otherwise affected by interrupt virtualization.
+---
+ include/asm-generic/atomic.h        |  8 ++++----
+ include/asm-generic/bitops/atomic.h |  8 ++++----
+ include/asm-generic/cmpxchg-local.h |  9 +++++----
+ lib/atomic64.c                      | 24 ++++++++++++------------
+ 4 files changed, 25 insertions(+), 24 deletions(-)
+
+diff --git a/include/asm-generic/atomic.h b/include/asm-generic/atomic.h
+index 3f38eb0..4f872ce 100644
+--- a/include/asm-generic/atomic.h
++++ b/include/asm-generic/atomic.h
+@@ -82,9 +82,9 @@
+ {									\
+ 	unsigned long flags;						\
+ 									\
+-	raw_local_irq_save(flags);					\
++	flags = hard_local_irq_save();					\
+ 	v->counter = v->counter c_op i;					\
+-	raw_local_irq_restore(flags);					\
++	hard_local_irq_restore(flags);					\
+ }
+ 
+ #define ATOMIC_OP_RETURN(op, c_op)					\
+@@ -93,9 +93,9 @@
+ 	unsigned long flags;						\
+ 	int ret;							\
+ 									\
+-	raw_local_irq_save(flags);					\
++	flags = hard_local_irq_save();					\
+ 	ret = (v->counter = v->counter c_op i);				\
+-	raw_local_irq_restore(flags);					\
++	hard_local_irq_restore(flags);					\
+ 									\
+ 	return ret;							\
+ }
+diff --git a/include/asm-generic/bitops/atomic.h b/include/asm-generic/bitops/atomic.h
+index 04deffa..73cadd7 100644
+--- a/include/asm-generic/bitops/atomic.h
++++ b/include/asm-generic/bitops/atomic.h
+@@ -22,20 +22,20 @@
+  * this is the substitute */
+ #define _atomic_spin_lock_irqsave(l,f) do {	\
+ 	arch_spinlock_t *s = ATOMIC_HASH(l);	\
+-	local_irq_save(f);			\
++	(f) = hard_local_irq_save();		\
+ 	arch_spin_lock(s);			\
+ } while(0)
+ 
+ #define _atomic_spin_unlock_irqrestore(l,f) do {	\
+ 	arch_spinlock_t *s = ATOMIC_HASH(l);		\
+ 	arch_spin_unlock(s);				\
+-	local_irq_restore(f);				\
++	hard_local_irq_restore(f);			\
+ } while(0)
+ 
+ 
+ #else
+-#  define _atomic_spin_lock_irqsave(l,f) do { local_irq_save(f); } while (0)
+-#  define _atomic_spin_unlock_irqrestore(l,f) do { local_irq_restore(f); } while (0)
++#  define _atomic_spin_lock_irqsave(l,f) do { (f) = hard_local_irq_save(); } while (0)
++#  define _atomic_spin_unlock_irqrestore(l,f) do { hard_local_irq_restore(f); } while (0)
+ #endif
+ 
+ /*
+diff --git a/include/asm-generic/cmpxchg-local.h b/include/asm-generic/cmpxchg-local.h
+index f17f14f..e05f37f 100644
+--- a/include/asm-generic/cmpxchg-local.h
++++ b/include/asm-generic/cmpxchg-local.h
+@@ -4,6 +4,7 @@
+ 
+ #include <linux/types.h>
+ #include <linux/irqflags.h>
++#include <asm-generic/ipipe.h>
+ 
+ extern unsigned long wrong_size_cmpxchg(volatile void *ptr)
+ 	__noreturn;
+@@ -23,7 +24,7 @@ static inline unsigned long __cmpxchg_local_generic(volatile void *ptr,
+ 	if (size == 8 && sizeof(unsigned long) != 8)
+ 		wrong_size_cmpxchg(ptr);
+ 
+-	raw_local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	switch (size) {
+ 	case 1: prev = *(u8 *)ptr;
+ 		if (prev == old)
+@@ -44,7 +45,7 @@ static inline unsigned long __cmpxchg_local_generic(volatile void *ptr,
+ 	default:
+ 		wrong_size_cmpxchg(ptr);
+ 	}
+-	raw_local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ 	return prev;
+ }
+ 
+@@ -57,11 +58,11 @@ static inline u64 __cmpxchg64_local_generic(volatile void *ptr,
+ 	u64 prev;
+ 	unsigned long flags;
+ 
+-	raw_local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	prev = *(u64 *)ptr;
+ 	if (prev == old)
+ 		*(u64 *)ptr = new;
+-	raw_local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ 	return prev;
+ }
+ 
+diff --git a/lib/atomic64.c b/lib/atomic64.c
+index 53c2d5e..12403ac 100644
+--- a/lib/atomic64.c
++++ b/lib/atomic64.c
+@@ -29,15 +29,15 @@
+  * Ensure each lock is in a separate cacheline.
+  */
+ static union {
+-	raw_spinlock_t lock;
++	ipipe_spinlock_t lock;
+ 	char pad[L1_CACHE_BYTES];
+ } atomic64_lock[NR_LOCKS] __cacheline_aligned_in_smp = {
+ 	[0 ... (NR_LOCKS - 1)] = {
+-		.lock =  __RAW_SPIN_LOCK_UNLOCKED(atomic64_lock.lock),
++		.lock =  IPIPE_SPIN_LOCK_UNLOCKED,
+ 	},
+ };
+ 
+-static inline raw_spinlock_t *lock_addr(const atomic64_t *v)
++static inline ipipe_spinlock_t *lock_addr(const atomic64_t *v)
+ {
+ 	unsigned long addr = (unsigned long) v;
+ 
+@@ -49,7 +49,7 @@ static inline raw_spinlock_t *lock_addr(const atomic64_t *v)
+ long long atomic64_read(const atomic64_t *v)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 	long long val;
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+@@ -62,7 +62,7 @@ long long atomic64_read(const atomic64_t *v)
+ void atomic64_set(atomic64_t *v, long long i)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+ 	v->counter = i;
+@@ -74,7 +74,7 @@ void atomic64_set(atomic64_t *v, long long i)
+ void atomic64_##op(long long a, atomic64_t *v)				\
+ {									\
+ 	unsigned long flags;						\
+-	raw_spinlock_t *lock = lock_addr(v);				\
++	ipipe_spinlock_t *lock = lock_addr(v);				\
+ 									\
+ 	raw_spin_lock_irqsave(lock, flags);				\
+ 	v->counter c_op a;						\
+@@ -86,7 +86,7 @@ void atomic64_set(atomic64_t *v, long long i)
+ long long atomic64_##op##_return(long long a, atomic64_t *v)		\
+ {									\
+ 	unsigned long flags;						\
+-	raw_spinlock_t *lock = lock_addr(v);				\
++	ipipe_spinlock_t *lock = lock_addr(v);				\
+ 	long long val;							\
+ 									\
+ 	raw_spin_lock_irqsave(lock, flags);				\
+@@ -100,7 +100,7 @@ void atomic64_set(atomic64_t *v, long long i)
+ long long atomic64_fetch_##op(long long a, atomic64_t *v)		\
+ {									\
+ 	unsigned long flags;						\
+-	raw_spinlock_t *lock = lock_addr(v);				\
++	ipipe_spinlock_t *lock = lock_addr(v);				\
+ 	long long val;							\
+ 									\
+ 	raw_spin_lock_irqsave(lock, flags);				\
+@@ -137,7 +137,7 @@ void atomic64_set(atomic64_t *v, long long i)
+ long long atomic64_dec_if_positive(atomic64_t *v)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 	long long val;
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+@@ -152,7 +152,7 @@ long long atomic64_dec_if_positive(atomic64_t *v)
+ long long atomic64_cmpxchg(atomic64_t *v, long long o, long long n)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 	long long val;
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+@@ -167,7 +167,7 @@ long long atomic64_cmpxchg(atomic64_t *v, long long o, long long n)
+ long long atomic64_xchg(atomic64_t *v, long long new)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 	long long val;
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+@@ -181,7 +181,7 @@ long long atomic64_xchg(atomic64_t *v, long long new)
+ int atomic64_add_unless(atomic64_t *v, long long a, long long u)
+ {
+ 	unsigned long flags;
+-	raw_spinlock_t *lock = lock_addr(v);
++	ipipe_spinlock_t *lock = lock_addr(v);
+ 	int ret = 0;
+ 
+ 	raw_spin_lock_irqsave(lock, flags);
+-- 
+1.9.1
+

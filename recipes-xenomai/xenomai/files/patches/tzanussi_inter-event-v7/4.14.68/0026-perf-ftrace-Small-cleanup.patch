@@ -1,0 +1,33 @@
+From 3685d4506303ff62c0fb790f32db602bfee698e5 Mon Sep 17 00:00:00 2001
+From: Peter Zijlstra <peterz@infradead.org>
+Date: Wed, 11 Oct 2017 09:45:31 +0200
+Subject: [PATCH 26/66] perf/ftrace: Small cleanup
+
+ops->flags _should_ be 0 at this point, so setting the flag using
+bitwise or is a bit daft.
+
+Link: http://lkml.kernel.org/r/20171011080224.315585202@infradead.org
+
+Requested-by: Steven Rostedt <rostedt@goodmis.org>
+Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ kernel/trace/trace_event_perf.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/trace/trace_event_perf.c b/kernel/trace/trace_event_perf.c
+index e73f9ab..55d6dff 100644
+--- a/kernel/trace/trace_event_perf.c
++++ b/kernel/trace/trace_event_perf.c
+@@ -363,7 +363,7 @@ static int perf_ftrace_function_register(struct perf_event *event)
+ {
+ 	struct ftrace_ops *ops = &event->ftrace_ops;
+ 
+-	ops->flags   |= FTRACE_OPS_FL_RCU;
++	ops->flags   = FTRACE_OPS_FL_RCU;
+ 	ops->func    = perf_ftrace_function_call;
+ 	ops->private = (void *)(unsigned long)nr_cpu_ids;
+ 
+-- 
+1.9.1
+

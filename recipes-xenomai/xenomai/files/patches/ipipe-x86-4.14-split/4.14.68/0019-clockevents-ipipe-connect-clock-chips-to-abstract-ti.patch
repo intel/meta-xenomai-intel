@@ -1,0 +1,58 @@
+From 252919a5bb21e20e9e009ac8f7ad7dc304b5614c Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:50:01 +0200
+Subject: [PATCH 019/137] clockevents: ipipe: connect clock chips to abstract
+ tick device
+
+Announce all clock event chips as they are registered to the
+out-of-band tick device infrastructure, so that we can interpose on
+key handlers in their descriptors.
+---
+ include/linux/clockchips.h | 9 +++++++++
+ kernel/time/clockevents.c  | 3 +++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/include/linux/clockchips.h b/include/linux/clockchips.h
+index 8ae9a95..ab59237 100644
+--- a/include/linux/clockchips.h
++++ b/include/linux/clockchips.h
+@@ -129,6 +129,15 @@ struct clock_event_device {
+ 	const struct cpumask	*cpumask;
+ 	struct list_head	list;
+ 	struct module		*owner;
++
++#ifdef CONFIG_IPIPE
++	struct ipipe_timer      *ipipe_timer;
++	unsigned                ipipe_stolen;
++
++#define clockevent_ipipe_stolen(evt) ((evt)->ipipe_stolen)
++#else
++#define clockevent_ipipe_stolen(evt) (0)
++#endif /* !CONFIG_IPIPE */
+ } ____cacheline_aligned;
+ 
+ /* Helpers to verify state of a clockevent device */
+diff --git a/kernel/time/clockevents.c b/kernel/time/clockevents.c
+index 4237e07..fd6894a 100644
+--- a/kernel/time/clockevents.c
++++ b/kernel/time/clockevents.c
+@@ -17,6 +17,7 @@
+ #include <linux/module.h>
+ #include <linux/smp.h>
+ #include <linux/device.h>
++#include <linux/ipipe_tickdev.h>
+ 
+ #include "tick-internal.h"
+ 
+@@ -453,6 +454,8 @@ void clockevents_register_device(struct clock_event_device *dev)
+ 	/* Initialize state to DETACHED */
+ 	clockevent_set_state(dev, CLOCK_EVT_STATE_DETACHED);
+ 
++	ipipe_host_timer_register(dev);
++
+ 	if (!dev->cpumask) {
+ 		WARN_ON(num_possible_cpus() > 1);
+ 		dev->cpumask = cpumask_of(smp_processor_id());
+-- 
+1.9.1
+

@@ -1,0 +1,336 @@
+From 49370d29bfc42bc8abb9c3c7635839fc36f85198 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 7 Dec 2017 17:04:43 +0100
+Subject: [PATCH 027/137] mm: ipipe: disable ondemand memory
+
+Co-kernels cannot bear with the extra latency caused by memory access
+faults involved in COW or
+overcommit. __ipipe_disable_ondemand_mappings() force commits all
+common memory mappings with physical RAM.
+
+In addition, the architecture code is given a chance to pre-load page
+table entries for ioremap and vmalloc memory, for preventing further
+minor faults accessing such memory due to PTE misses (if that ever
+makes sense for them).
+
+Revisit: Further COW breaking in copy_user_page() and copy_pte_range()
+may be useless once __ipipe_disable_ondemand_mappings() has run for a
+co-kernel task, since all of its mappings have been populated, and
+unCOWed if applicable.
+---
+ include/linux/ipipe.h          |  4 ++
+ include/linux/sched/coredump.h |  1 +
+ lib/ioremap.c                  |  8 +++-
+ mm/memory.c                    | 97 +++++++++++++++++++++++++++++++++++++++---
+ mm/mlock.c                     | 24 +++++++++++
+ mm/mprotect.c                  | 11 ++++-
+ mm/vmalloc.c                   |  2 +
+ 7 files changed, 140 insertions(+), 7 deletions(-)
+
+diff --git a/include/linux/ipipe.h b/include/linux/ipipe.h
+index 1aa9e8f..ed6afd5 100644
+--- a/include/linux/ipipe.h
++++ b/include/linux/ipipe.h
+@@ -73,6 +73,10 @@ struct ipipe_work_header {
+ 
+ void __ipipe_arch_share_current(int flags);
+ 
++int __ipipe_disable_ondemand_mappings(struct task_struct *p);
++
++int __ipipe_pin_vma(struct mm_struct *mm, struct vm_area_struct *vma);
++
+ /*
+  * Obsolete - no arch implements PIC muting anymore. Null helpers are
+  * kept for building legacy co-kernel releases.
+diff --git a/include/linux/sched/coredump.h b/include/linux/sched/coredump.h
+index ec912d0..07d34a3 100644
+--- a/include/linux/sched/coredump.h
++++ b/include/linux/sched/coredump.h
+@@ -72,6 +72,7 @@ static inline int get_dumpable(struct mm_struct *mm)
+ #define MMF_DISABLE_THP		24	/* disable THP for all VMAs */
+ #define MMF_OOM_VICTIM		25	/* mm is the oom victim */
+ #define MMF_DISABLE_THP_MASK	(1 << MMF_DISABLE_THP)
++#define MMF_VM_PINNED		31	/* ondemand load up and COW disabled */
+ 
+ #define MMF_INIT_MASK		(MMF_DUMPABLE_MASK | MMF_DUMP_FILTER_MASK |\
+ 				 MMF_DISABLE_THP_MASK)
+diff --git a/lib/ioremap.c b/lib/ioremap.c
+index 517f585..90231c5 100644
+--- a/lib/ioremap.c
++++ b/lib/ioremap.c
+@@ -11,6 +11,7 @@
+ #include <linux/sched.h>
+ #include <linux/io.h>
+ #include <linux/export.h>
++#include <linux/hardirq.h>
+ #include <asm/cacheflush.h>
+ #include <asm/pgtable.h>
+ 
+@@ -177,7 +178,12 @@ int ioremap_page_range(unsigned long addr,
+ 			break;
+ 	} while (pgd++, addr = next, addr != end);
+ 
+-	flush_cache_vmap(start, end);
++	/* APEI may invoke this for temporarily remapping pages in interrupt
++	 * context - nothing we can and need to propagate globally. */
++	if (!in_interrupt()) {
++		__ipipe_pin_mapping_globally(start, end);
++		flush_cache_vmap(start, end);
++	}
+ 
+ 	return err;
+ }
+diff --git a/mm/memory.c b/mm/memory.c
+index c9657f0..4c88824 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -55,6 +55,7 @@
+ #include <linux/export.h>
+ #include <linux/delayacct.h>
+ #include <linux/init.h>
++#include <linux/ipipe.h>
+ #include <linux/pfn_t.h>
+ #include <linux/writeback.h>
+ #include <linux/memcontrol.h>
+@@ -129,6 +130,11 @@ static int __init disable_randmaps(char *s)
+ 
+ unsigned long highest_memmap_pfn __read_mostly;
+ 
++static inline void cow_user_page(struct page *dst,
++				 struct page *src,
++				 unsigned long va,
++				 struct vm_area_struct *vma);
++
+ /*
+  * CONFIG_MMU architectures set up ZERO_PAGE in their paging_init()
+  */
+@@ -957,8 +963,8 @@ struct page *vm_normal_page_pmd(struct vm_area_struct *vma, unsigned long addr,
+ 
+ static inline unsigned long
+ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+-		pte_t *dst_pte, pte_t *src_pte, struct vm_area_struct *vma,
+-		unsigned long addr, int *rss)
++	     pte_t *dst_pte, pte_t *src_pte, struct vm_area_struct *vma,
++	     unsigned long addr, int *rss, struct page *uncow_page)
+ {
+ 	unsigned long vm_flags = vma->vm_flags;
+ 	pte_t pte = *src_pte;
+@@ -1036,6 +1042,21 @@ struct page *vm_normal_page_pmd(struct vm_area_struct *vma, unsigned long addr,
+ 	 * in the parent and the child
+ 	 */
+ 	if (is_cow_mapping(vm_flags)) {
++#ifdef CONFIG_IPIPE
++		if (uncow_page) {
++			struct page *old_page = vm_normal_page(vma, addr, pte);
++			cow_user_page(uncow_page, old_page, addr, vma);
++			pte = mk_pte(uncow_page, vma->vm_page_prot);
++
++			if (vm_flags & VM_SHARED)
++				pte = pte_mkclean(pte);
++			pte = pte_mkold(pte);
++
++			page_add_new_anon_rmap(uncow_page, vma, addr, false);
++			rss[!!PageAnon(uncow_page)]++;
++			goto out_set_pte;
++		}
++#endif /* CONFIG_IPIPE */
+ 		ptep_set_wrprotect(src_mm, addr, src_pte);
+ 		pte = pte_wrprotect(pte);
+ 	}
+@@ -1083,13 +1104,27 @@ static int copy_pte_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 	int progress = 0;
+ 	int rss[NR_MM_COUNTERS];
+ 	swp_entry_t entry = (swp_entry_t){0};
+-
++	struct page *uncow_page = NULL;
++#ifdef CONFIG_IPIPE
++	int do_cow_break = 0;
++again:
++	if (do_cow_break) {
++		uncow_page = alloc_page_vma(GFP_HIGHUSER, vma, addr);
++		if (uncow_page == NULL)
++			return -ENOMEM;
++		do_cow_break = 0;
++	}
++#else
+ again:
++#endif
+ 	init_rss_vec(rss);
+ 
+ 	dst_pte = pte_alloc_map_lock(dst_mm, dst_pmd, addr, &dst_ptl);
+-	if (!dst_pte)
++	if (!dst_pte) {
++		if (uncow_page)
++			put_page(uncow_page);
+ 		return -ENOMEM;
++	}
+ 	src_pte = pte_offset_map(src_pmd, addr);
+ 	src_ptl = pte_lockptr(src_mm, src_pmd);
+ 	spin_lock_nested(src_ptl, SINGLE_DEPTH_NESTING);
+@@ -1112,8 +1147,25 @@ static int copy_pte_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 			progress++;
+ 			continue;
+ 		}
++#ifdef CONFIG_IPIPE
++		if (likely(uncow_page == NULL) && likely(pte_present(*src_pte))) {
++			if (is_cow_mapping(vma->vm_flags) &&
++			    test_bit(MMF_VM_PINNED, &src_mm->flags) &&
++			    ((vma->vm_flags|src_mm->def_flags) & VM_LOCKED)) {
++				arch_leave_lazy_mmu_mode();
++				spin_unlock(src_ptl);
++				pte_unmap(src_pte);
++				add_mm_rss_vec(dst_mm, rss);
++				pte_unmap_unlock(dst_pte, dst_ptl);
++				cond_resched();
++				do_cow_break = 1;
++				goto again;
++			}
++		}
++#endif
+ 		entry.val = copy_one_pte(dst_mm, src_mm, dst_pte, src_pte,
+-							vma, addr, rss);
++					 vma, addr, rss, uncow_page);
++		uncow_page = NULL;
+ 		if (entry.val)
+ 			break;
+ 		progress += 8;
+@@ -4678,6 +4730,41 @@ long copy_huge_page_from_user(struct page *dst_page,
+ }
+ #endif /* CONFIG_TRANSPARENT_HUGEPAGE || CONFIG_HUGETLBFS */
+ 
++#ifdef CONFIG_IPIPE
++
++int __ipipe_disable_ondemand_mappings(struct task_struct *tsk)
++{
++	struct vm_area_struct *vma;
++	struct mm_struct *mm;
++	int result = 0;
++
++	mm = get_task_mm(tsk);
++	if (!mm)
++		return -EPERM;
++
++	down_write(&mm->mmap_sem);
++	if (test_bit(MMF_VM_PINNED, &mm->flags))
++		goto done_mm;
++
++	for (vma = mm->mmap; vma; vma = vma->vm_next) {
++		if (is_cow_mapping(vma->vm_flags) &&
++		    (vma->vm_flags & VM_WRITE)) {
++			result = __ipipe_pin_vma(mm, vma);
++			if (result < 0)
++				goto done_mm;
++		}
++	}
++	set_bit(MMF_VM_PINNED, &mm->flags);
++
++  done_mm:
++	up_write(&mm->mmap_sem);
++	mmput(mm);
++	return result;
++}
++EXPORT_SYMBOL_GPL(__ipipe_disable_ondemand_mappings);
++
++#endif /* CONFIG_IPIPE */
++
+ #if USE_SPLIT_PTE_PTLOCKS && ALLOC_SPLIT_PTLOCKS
+ 
+ static struct kmem_cache *page_ptl_cachep;
+diff --git a/mm/mlock.c b/mm/mlock.c
+index 46af369..392a756 100644
+--- a/mm/mlock.c
++++ b/mm/mlock.c
+@@ -864,3 +864,27 @@ void user_shm_unlock(size_t size, struct user_struct *user)
+ 	spin_unlock(&shmlock_user_lock);
+ 	free_uid(user);
+ }
++
++#ifdef CONFIG_IPIPE
++int __ipipe_pin_vma(struct mm_struct *mm, struct vm_area_struct *vma)
++{
++	int ret, write, len;
++
++	if (vma->vm_flags & (VM_IO | VM_PFNMAP))
++		return 0;
++
++	if (!((vma->vm_flags & VM_DONTEXPAND) ||
++	    is_vm_hugetlb_page(vma) || vma == get_gate_vma(mm))) {
++		ret = populate_vma_page_range(vma, vma->vm_start, vma->vm_end,
++					      NULL);
++		return ret < 0 ? ret : 0;
++	}
++
++	write = (vma->vm_flags & (VM_WRITE | VM_SHARED)) == VM_WRITE;
++	len = DIV_ROUND_UP(vma->vm_end, PAGE_SIZE) - vma->vm_start/PAGE_SIZE;
++	ret = get_user_pages(vma->vm_start, len, write, 0, NULL);
++	if (ret < 0)
++		return ret;
++	return ret == len ? 0 : -EFAULT;
++}
++#endif
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index 60864e1..23871d5 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -22,6 +22,7 @@
+ #include <linux/swap.h>
+ #include <linux/swapops.h>
+ #include <linux/mmu_notifier.h>
++#include <linux/ipipe.h>
+ #include <linux/migrate.h>
+ #include <linux/perf_event.h>
+ #include <linux/pkeys.h>
+@@ -41,7 +42,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 	struct mm_struct *mm = vma->vm_mm;
+ 	pte_t *pte, oldpte;
+ 	spinlock_t *ptl;
+-	unsigned long pages = 0;
++	unsigned long pages = 0, flags;
+ 	int target_node = NUMA_NO_NODE;
+ 
+ 	/*
+@@ -96,6 +97,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 					continue;
+ 			}
+ 
++			flags = hard_local_irq_save();
+ 			ptent = ptep_modify_prot_start(mm, addr, pte);
+ 			ptent = pte_modify(ptent, newprot);
+ 			if (preserve_write)
+@@ -108,6 +110,7 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
+ 				ptent = pte_mkwrite(ptent);
+ 			}
+ 			ptep_modify_prot_commit(mm, addr, pte, ptent);
++			hard_local_irq_restore(flags);
+ 			pages++;
+ 		} else if (IS_ENABLED(CONFIG_MIGRATION)) {
+ 			swp_entry_t entry = pte_to_swp_entry(oldpte);
+@@ -288,6 +291,12 @@ unsigned long change_protection(struct vm_area_struct *vma, unsigned long start,
+ 		pages = hugetlb_change_protection(vma, start, end, newprot);
+ 	else
+ 		pages = change_protection_range(vma, start, end, newprot, dirty_accountable, prot_numa);
++#ifdef CONFIG_IPIPE
++	if (test_bit(MMF_VM_PINNED, &vma->vm_mm->flags) &&
++	    ((vma->vm_flags | vma->vm_mm->def_flags) & VM_LOCKED) &&
++	    (vma->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)))
++		__ipipe_pin_vma(vma->vm_mm, vma);
++#endif
+ 
+ 	return pages;
+ }
+diff --git a/mm/vmalloc.c b/mm/vmalloc.c
+index 9d14aa9..f17a4b8 100644
+--- a/mm/vmalloc.c
++++ b/mm/vmalloc.c
+@@ -232,6 +232,8 @@ static int vmap_page_range_noflush(unsigned long start, unsigned long end,
+ 			return err;
+ 	} while (pgd++, addr = next, addr != end);
+ 
++	__ipipe_pin_mapping_globally(start, end);
++
+ 	return nr;
+ }
+ 
+-- 
+1.9.1
+

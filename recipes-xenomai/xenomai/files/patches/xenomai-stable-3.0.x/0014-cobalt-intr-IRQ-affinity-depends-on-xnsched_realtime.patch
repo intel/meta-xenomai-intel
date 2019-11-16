@@ -1,0 +1,32 @@
+From 92862858f4ac4c378d5510cdca9dc998b3801fdf Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Mon, 1 Oct 2018 15:56:16 +0200
+Subject: [PATCH 14/21] cobalt/intr: IRQ affinity depends on
+ xnsched_realtime_cpus
+
+cobalt_cpu_affinity defines the CPU set which may run Cobalt threads,
+which is a subset of xnsched_realtime_cpus. I.e. we may handle IRQs
+over CPUs which do not run threads.
+
+Signed-off-by: Philippe Gerum <rpm@xenomai.org>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/intr.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/cobalt/intr.c b/kernel/cobalt/intr.c
+index 69faa23..184ffad 100644
+--- a/kernel/cobalt/intr.c
++++ b/kernel/cobalt/intr.c
+@@ -822,7 +822,7 @@ int xnintr_attach(struct xnintr *intr, void *cookie)
+ 	clear_irqstats(intr);
+ 
+ #ifdef CONFIG_SMP
+-	ipipe_set_irq_affinity(intr->irq, cobalt_cpu_affinity);
++	ipipe_set_irq_affinity(intr->irq, xnsched_realtime_cpus);
+ #endif /* CONFIG_SMP */
+ 
+ 	raw_spin_lock(&intr->lock);
+-- 
+1.9.1
+

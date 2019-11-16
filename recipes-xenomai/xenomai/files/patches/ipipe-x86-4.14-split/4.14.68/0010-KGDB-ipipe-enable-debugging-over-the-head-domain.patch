@@ -1,0 +1,88 @@
+From bd28196d075b2bddc875a6ad82487736e0bd030b Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:17:28 +0200
+Subject: [PATCH 010/137] KGDB: ipipe: enable debugging over the head domain
+
+Make the KGDB stub runnable over the head domain since we may take
+traps and interrupts from that context too, by converting the locks to
+hard spinlocks.
+---
+ kernel/debug/debug_core.c | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/kernel/debug/debug_core.c b/kernel/debug/debug_core.c
+index 65c0f13..819a6c4 100644
+--- a/kernel/debug/debug_core.c
++++ b/kernel/debug/debug_core.c
+@@ -119,8 +119,8 @@ static int __init opt_kgdb_con(char *str)
+  */
+ atomic_t			kgdb_active = ATOMIC_INIT(-1);
+ EXPORT_SYMBOL_GPL(kgdb_active);
+-static DEFINE_RAW_SPINLOCK(dbg_master_lock);
+-static DEFINE_RAW_SPINLOCK(dbg_slave_lock);
++static IPIPE_DEFINE_RAW_SPINLOCK(dbg_master_lock);
++static IPIPE_DEFINE_RAW_SPINLOCK(dbg_slave_lock);
+ 
+ /*
+  * We use NR_CPUs not PERCPU, in case kgdb is used to debug early
+@@ -461,7 +461,9 @@ static int kgdb_reenter_check(struct kgdb_state *ks)
+ static void dbg_touch_watchdogs(void)
+ {
+ 	touch_softlockup_watchdog_sync();
++#ifndef CONFIG_IPIPE
+ 	clocksource_touch_watchdog();
++#endif
+ 	rcu_cpu_stall_reset();
+ }
+ 
+@@ -492,7 +494,7 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
+ 	 * Interrupts will be restored by the 'trap return' code, except when
+ 	 * single stepping.
+ 	 */
+-	local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 
+ 	cpu = ks->cpu;
+ 	kgdb_info[cpu].debuggerinfo = regs;
+@@ -541,7 +543,7 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
+ 			smp_mb__before_atomic();
+ 			atomic_dec(&slaves_in_kgdb);
+ 			dbg_touch_watchdogs();
+-			local_irq_restore(flags);
++			hard_local_irq_restore(flags);
+ 			return 0;
+ 		}
+ 		cpu_relax();
+@@ -559,7 +561,7 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
+ 		atomic_set(&kgdb_active, -1);
+ 		raw_spin_unlock(&dbg_master_lock);
+ 		dbg_touch_watchdogs();
+-		local_irq_restore(flags);
++		hard_local_irq_restore(flags);
+ 
+ 		goto acquirelock;
+ 	}
+@@ -676,7 +678,7 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
+ 	atomic_set(&kgdb_active, -1);
+ 	raw_spin_unlock(&dbg_master_lock);
+ 	dbg_touch_watchdogs();
+-	local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ 
+ 	return kgdb_info[cpu].ret_state;
+ }
+@@ -795,9 +797,9 @@ static void kgdb_console_write(struct console *co, const char *s,
+ 	if (!kgdb_connected || atomic_read(&kgdb_active) != -1 || dbg_kdb_mode)
+ 		return;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	gdbstub_msg_write(s, count);
+-	local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ }
+ 
+ static struct console kgdbcons = {
+-- 
+1.9.1
+

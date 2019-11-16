@@ -1,0 +1,199 @@
+From 79a265d8cc9281f96e4c48b47a8e31f591555ac9 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Wed, 6 Sep 2017 08:40:41 -0400
+Subject: [PATCH 15/66] ftrace/kallsyms: Have /proc/kallsyms show saved mod
+ init functions
+
+If a module is loaded while tracing is enabled, then there's a possibility
+that the module init functions were traced. These functions have their name
+and address stored by ftrace such that it can translate the function address
+that is written into the buffer into a human readable function name.
+
+As userspace tools may be doing the same, they need a way to map function
+names to their address as well. This is done through reading /proc/kallsyms.
+
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/linux/ftrace.h |  9 +++++++++
+ kernel/kallsyms.c      | 38 ++++++++++++++++++++++++++++++++------
+ kernel/trace/ftrace.c  | 40 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 81 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/ftrace.h b/include/linux/ftrace.h
+index 7e80e57..dbb1c8e 100644
+--- a/include/linux/ftrace.h
++++ b/include/linux/ftrace.h
+@@ -57,6 +57,9 @@ static inline void early_trace_init(void) { }
+ const char *
+ ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
+ 		   unsigned long *off, char **modname, char *sym);
++int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *value,
++			   char *type, char *name,
++			   char *module_name, int *exported);
+ #else
+ static inline const char *
+ ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
+@@ -64,6 +67,12 @@ static inline void early_trace_init(void) { }
+ {
+ 	return NULL;
+ }
++static inline int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *value,
++					 char *type, char *name,
++					 char *module_name, int *exported)
++{
++	return -1;
++}
+ #endif
+ 
+ 
+diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+index 976ecb9..1966fe1 100644
+--- a/kernel/kallsyms.c
++++ b/kernel/kallsyms.c
+@@ -479,6 +479,7 @@ void __print_symbol(const char *fmt, unsigned long address)
+ struct kallsym_iter {
+ 	loff_t pos;
+ 	loff_t pos_mod_end;
++	loff_t pos_ftrace_mod_end;
+ 	unsigned long value;
+ 	unsigned int nameoff; /* If iterating in core kernel symbols. */
+ 	char type;
+@@ -501,11 +502,25 @@ static int get_ksymbol_mod(struct kallsym_iter *iter)
+ 	return 1;
+ }
+ 
++static int get_ksymbol_ftrace_mod(struct kallsym_iter *iter)
++{
++	int ret = ftrace_mod_get_kallsym(iter->pos - iter->pos_mod_end,
++					 &iter->value, &iter->type,
++					 iter->name, iter->module_name,
++					 &iter->exported);
++	if (ret < 0) {
++		iter->pos_ftrace_mod_end = iter->pos;
++		return 0;
++	}
++
++	return 1;
++}
++
+ static int get_ksymbol_bpf(struct kallsym_iter *iter)
+ {
+ 	iter->module_name[0] = '\0';
+ 	iter->exported = 0;
+-	return bpf_get_kallsym(iter->pos - iter->pos_mod_end,
++	return bpf_get_kallsym(iter->pos - iter->pos_ftrace_mod_end,
+ 			       &iter->value, &iter->type,
+ 			       iter->name) < 0 ? 0 : 1;
+ }
+@@ -530,20 +545,31 @@ static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
+ 	iter->name[0] = '\0';
+ 	iter->nameoff = get_symbol_offset(new_pos);
+ 	iter->pos = new_pos;
+-	if (new_pos == 0)
++	if (new_pos == 0) {
+ 		iter->pos_mod_end = 0;
++		iter->pos_ftrace_mod_end = 0;
++	}
+ }
+ 
+ static int update_iter_mod(struct kallsym_iter *iter, loff_t pos)
+ {
+ 	iter->pos = pos;
+ 
+-	if (iter->pos_mod_end > 0 &&
+-	    iter->pos_mod_end < iter->pos)
++	if (iter->pos_ftrace_mod_end > 0 &&
++	    iter->pos_ftrace_mod_end < iter->pos)
+ 		return get_ksymbol_bpf(iter);
+ 
+-	if (!get_ksymbol_mod(iter))
+-		return get_ksymbol_bpf(iter);
++	if (iter->pos_mod_end > 0 &&
++	    iter->pos_mod_end < iter->pos) {
++		if (!get_ksymbol_ftrace_mod(iter))
++			return get_ksymbol_bpf(iter);
++		return 1;
++	}
++
++	if (!get_ksymbol_mod(iter)) {
++		if (!get_ksymbol_ftrace_mod(iter))
++			return get_ksymbol_bpf(iter);
++	}
+ 
+ 	return 1;
+ }
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index 379ae40..d64f548 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -5685,6 +5685,7 @@ struct ftrace_mod_map {
+ 	unsigned long		start_addr;
+ 	unsigned long		end_addr;
+ 	struct list_head	funcs;
++	unsigned int		num_funcs;
+ };
+ 
+ #ifdef CONFIG_MODULES
+@@ -5936,6 +5937,8 @@ static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
+ 	mod_func->ip = rec->ip - offset;
+ 	mod_func->size = symsize;
+ 
++	mod_map->num_funcs++;
++
+ 	list_add_rcu(&mod_func->list, &mod_map->funcs);
+ }
+ 
+@@ -5952,6 +5955,7 @@ static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
+ 	mod_map->mod = mod;
+ 	mod_map->start_addr = start;
+ 	mod_map->end_addr = end;
++	mod_map->num_funcs = 0;
+ 
+ 	INIT_LIST_HEAD_RCU(&mod_map->funcs);
+ 
+@@ -6012,6 +6016,42 @@ static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
+ 	return ret;
+ }
+ 
++int ftrace_mod_get_kallsym(unsigned int symnum, unsigned long *value,
++			   char *type, char *name,
++			   char *module_name, int *exported)
++{
++	struct ftrace_mod_map *mod_map;
++	struct ftrace_mod_func *mod_func;
++
++	preempt_disable();
++	list_for_each_entry_rcu(mod_map, &ftrace_mod_maps, list) {
++
++		if (symnum >= mod_map->num_funcs) {
++			symnum -= mod_map->num_funcs;
++			continue;
++		}
++
++		list_for_each_entry_rcu(mod_func, &mod_map->funcs, list) {
++			if (symnum > 1) {
++				symnum--;
++				continue;
++			}
++
++			*value = mod_func->ip;
++			*type = 'T';
++			strlcpy(name, mod_func->name, KSYM_NAME_LEN);
++			strlcpy(module_name, mod_map->mod->name, MODULE_NAME_LEN);
++			*exported = 1;
++			preempt_enable();
++			return 0;
++		}
++		WARN_ON(1);
++		break;
++	}
++	preempt_enable();
++	return -ERANGE;
++}
++
+ #else
+ static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
+ 				struct dyn_ftrace *rec) { }
+-- 
+1.9.1
+

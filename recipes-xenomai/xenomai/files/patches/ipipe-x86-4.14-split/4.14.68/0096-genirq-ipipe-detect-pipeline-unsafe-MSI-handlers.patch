@@ -1,0 +1,26 @@
+From 43db9096f724ea2838c27f9a931b972466b397b1 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 18 Sep 2018 10:07:26 +0200
+Subject: [PATCH 096/137] genirq: ipipe: detect pipeline-unsafe MSI handlers
+
+---
+ kernel/irq/msi.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/kernel/irq/msi.c b/kernel/irq/msi.c
+index 3fa4bd5..026777e 100644
+--- a/kernel/irq/msi.c
++++ b/kernel/irq/msi.c
+@@ -251,6 +251,9 @@ static void msi_domain_update_chip_ops(struct msi_domain_info *info)
+ 	struct irq_chip *chip = info->chip;
+ 
+ 	BUG_ON(!chip || !chip->irq_mask || !chip->irq_unmask);
++	WARN_ONCE(IS_ENABLED(CONFIG_IPIPE) &&
++		  (chip->flags & IRQCHIP_PIPELINE_SAFE) == 0,
++		  "MSI domain irqchip %s is not pipeline-safe!", chip->name);
+ 	if (!chip->irq_set_affinity)
+ 		chip->irq_set_affinity = msi_domain_set_affinity;
+ }
+-- 
+1.9.1
+

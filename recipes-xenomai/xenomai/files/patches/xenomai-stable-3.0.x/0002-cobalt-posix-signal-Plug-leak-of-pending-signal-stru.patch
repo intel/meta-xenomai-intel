@@ -1,0 +1,47 @@
+From d7821cf93c4532bac2bb4a4e10ce910c9faf4b4a Mon Sep 17 00:00:00 2001
+From: Jan Kiszka <jan.kiszka@siemens.com>
+Date: Mon, 2 Jul 2018 15:41:00 +0200
+Subject: [PATCH 02/21] cobalt/posix/signal: Plug leak of pending signal struct
+ on thread deletion
+
+We need to free pending signals that have been allocated via
+cobalt_signal_alloc() on thread destruction, or we will run out of them
+quickly.
+
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/posix/signal.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/cobalt/posix/signal.c b/kernel/cobalt/posix/signal.c
+index e870283..28358fb 100644
+--- a/kernel/cobalt/posix/signal.c
++++ b/kernel/cobalt/posix/signal.c
+@@ -176,6 +176,7 @@ void cobalt_signal_flush(struct cobalt_thread *thread)
+ {
+ 	struct cobalt_sigpending *sigp, *tmp;
+ 	struct list_head *sigq;
++	spl_t s;
+ 	int n;
+ 
+ 	/*
+@@ -194,8 +195,15 @@ void cobalt_signal_flush(struct cobalt_thread *thread)
+ 		 * detect this fact when deleting their respective
+ 		 * owners.
+ 		 */
+-		list_for_each_entry_safe(sigp, tmp, sigq, next)
++		list_for_each_entry_safe(sigp, tmp, sigq, next) {
+ 			list_del_init(&sigp->next);
++			if ((void *)sigp >= sigpending_mem &&
++			    (void *)sigp < sigpending_mem + __SIGPOOL_SIZE) {
++				xnlock_get_irqsave(&nklock, s);
++				list_add_tail(&sigp->next, &sigpending_pool);
++				xnlock_put_irqrestore(&nklock, s);
++			}
++		}
+ 	}
+ 
+ 	sigemptyset(&thread->sigpending);
+-- 
+1.9.1
+

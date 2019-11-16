@@ -1,0 +1,46 @@
+From 6f19fa4f3a7027ebf79c4f0d970f161ae5715365 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 21 Sep 2018 13:26:41 +0200
+Subject: [PATCH 100/137] ipipe: timer: notify co-kernel about entering
+ ONESHOT_STOPPED mode
+
+Although we don't want to disable the hardware not to wreck the
+outstanding timing requests managed by the co-kernel, we should
+nevertheless notify it about entering the ONESHOT_STOPPED mode, so
+that it may disable the host tick emulation.
+---
+ kernel/ipipe/timer.c | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/ipipe/timer.c b/kernel/ipipe/timer.c
+index 5ba94bf..96989a5 100644
+--- a/kernel/ipipe/timer.c
++++ b/kernel/ipipe/timer.c
+@@ -370,6 +370,15 @@ static int do_set_oneshot(struct clock_event_device *cdev)
+ 	return 0;
+ }
+ 
++static int do_set_oneshot_stopped(struct clock_event_device *cdev)
++{
++	struct ipipe_timer *timer = __ipipe_raw_cpu_read(percpu_timer);
++
++	timer->mode_handler(CLOCK_EVT_MODE_SHUTDOWN, cdev);
++
++	return 0;
++}
++
+ static int do_set_periodic(struct clock_event_device *cdev)
+ {
+ 	struct ipipe_timer *timer = __ipipe_raw_cpu_read(percpu_timer);
+@@ -440,7 +449,7 @@ static void grab_timer(void *arg)
+ 		if (timer->orig_set_state_oneshot)
+ 			evtdev->set_state_oneshot = do_set_oneshot;
+ 		if (timer->orig_set_state_oneshot_stopped)
+-			evtdev->set_state_oneshot_stopped = do_set_oneshot;
++			evtdev->set_state_oneshot_stopped = do_set_oneshot_stopped;
+ 		if (timer->orig_set_state_shutdown)
+ 			evtdev->set_state_shutdown = do_set_shutdown;
+ 		evtdev->set_next_event = data->emutick;
+-- 
+1.9.1
+

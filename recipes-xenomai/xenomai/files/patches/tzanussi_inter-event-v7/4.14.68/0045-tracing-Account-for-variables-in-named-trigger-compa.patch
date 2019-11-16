@@ -1,0 +1,46 @@
+From d6ab9552ba54e1911e95e4670c85fff13f155211 Mon Sep 17 00:00:00 2001
+From: Tom Zanussi <tom.zanussi@linux.intel.com>
+Date: Sat, 3 Dec 2016 17:44:56 -0600
+Subject: [PATCH 45/66] tracing: Account for variables in named trigger
+ compatibility
+
+Named triggers must also have the same set of variables in order to be
+considered compatible - update the trigger match test to account for
+that.
+
+The reason for this requirement is that named triggers with variables
+are meant to allow one or more events to set the same variable.
+
+Signed-off-by: Tom Zanussi <tom.zanussi@linux.intel.com>
+---
+ kernel/trace/trace_events_hist.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/trace/trace_events_hist.c b/kernel/trace/trace_events_hist.c
+index c385e56..10b79ec 100644
+--- a/kernel/trace/trace_events_hist.c
++++ b/kernel/trace/trace_events_hist.c
+@@ -1610,7 +1610,7 @@ static int event_hist_trigger_print(struct seq_file *m,
+ 		sort_key = &hist_data->sort_keys[i];
+ 		idx = sort_key->field_idx;
+ 
+-		if (WARN_ON(idx >= TRACING_MAP_FIELDS_MAX))
++		if (WARN_ON(idx >= HIST_FIELDS_MAX))
+ 			return -EINVAL;
+ 
+ 		if (i > 0)
+@@ -1798,6 +1798,11 @@ static bool hist_trigger_match(struct event_trigger_data *data,
+ 			return false;
+ 		if (key_field->is_signed != key_field_test->is_signed)
+ 			return false;
++		if (!!key_field->var.name != !!key_field_test->var.name)
++			return false;
++		if (key_field->var.name &&
++		    strcmp(key_field->var.name, key_field_test->var.name) != 0)
++			return false;
+ 	}
+ 
+ 	for (i = 0; i < hist_data->n_sort_keys; i++) {
+-- 
+1.9.1
+

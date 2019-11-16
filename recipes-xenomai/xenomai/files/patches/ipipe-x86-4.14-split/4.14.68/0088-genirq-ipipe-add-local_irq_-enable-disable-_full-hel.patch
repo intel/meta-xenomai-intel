@@ -1,0 +1,43 @@
+From 18b8aa7c94eafde3fe33d5c86be33649acb8fbce Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 24 Aug 2018 10:37:30 +0200
+Subject: [PATCH 088/137] genirq: ipipe: add local_irq_{enable, disable}_full()
+ helpers
+
+Those helpers affect both the real (in CPU) and virtual interrupt
+states for the root stage, reconciling them.
+---
+ include/linux/irqflags.h | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/include/linux/irqflags.h b/include/linux/irqflags.h
+index 46cb57d..1bd20fc 100644
+--- a/include/linux/irqflags.h
++++ b/include/linux/irqflags.h
+@@ -145,6 +145,23 @@
+ 
+ #endif /* CONFIG_TRACE_IRQFLAGS */
+ 
++#ifdef CONFIG_IPIPE
++#define local_irq_enable_full()			\
++	do {					\
++		hard_local_irq_enable();	\
++		local_irq_enable();		\
++	} while (0)
++
++#define local_irq_disable_full()		\
++	do {					\
++		local_irq_disable();		\
++		hard_local_irq_disable();	\
++	} while (0)
++#else
++#define local_irq_enable_full()		local_irq_enable()
++#define local_irq_disable_full()	local_irq_disable()
++#endif
++
+ #define local_save_flags(flags)	raw_local_save_flags(flags)
+ 
+ /*
+-- 
+1.9.1
+

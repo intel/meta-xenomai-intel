@@ -1,0 +1,39 @@
+From 3948d6326ec437670b5575d3669e65bd18965168 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sat, 22 Sep 2018 15:37:22 +0200
+Subject: [PATCH 130/137] x86: ipipe: remove 32bit support from shared context
+ switch code
+
+---
+ arch/x86/kernel/process_32.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kernel/process_32.c b/arch/x86/kernel/process_32.c
+index 2bada26..0568f90 100644
+--- a/arch/x86/kernel/process_32.c
++++ b/arch/x86/kernel/process_32.c
+@@ -235,11 +235,10 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long sp,
+ 	struct fpu *next_fpu = &next->fpu;
+ 	int cpu = raw_smp_processor_id();
+ 	struct tss_struct *tss = &per_cpu(cpu_tss_rw, cpu);
+-	int slope = ipipe_get_domain_slope_hook(prev_p, next_p);
+ 
+ 	/* never put a printk in __switch_to... printk() calls wake_up*() indirectly */
+ 
+-	switch_fpu_prepare(prev_fpu, cpu, slot);
++	switch_fpu_prepare(prev_fpu, cpu);
+ 
+ 	/*
+ 	 * Save away %gs. No need to save %fs, as it was saved on the
+@@ -300,7 +299,7 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long sp,
+ 	if (prev->gs | next->gs)
+ 		lazy_load_gs(next->gs);
+ 
+-	switch_fpu_finish(next_fpu, cpu, slope);
++	switch_fpu_finish(next_fpu, cpu);
+ 
+ 	this_cpu_write(current_task, next_p);
+ 
+-- 
+1.9.1
+

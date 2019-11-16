@@ -1,0 +1,13 @@
+# commonly used patchset for tracing in linux-intel (base/4.14)
+patch patches/common/0001-ANDROID-trace-power-add-trace_clock_set_parent.patch
+patch patches/common/0002-ANDROID-trace-add-non-hierarchical-function_graph-op.patch
+patch patches/common/0003-ANDROID-trace-fix-compilation-for-4.1.patch
+patch patches/common/0004-ANDROID-trace-net-use-pK-for-kernel-pointers.patch
+patch patches/common/0005-tracing-Add-msi_lat-tracepoints.patch
+patch patches/common/0006-Latency-new-tracepoints-for-irq-and-preemption-laten.patch
+
+# commonly used patchset for tuning CPU and GFx Freq. idle in linux-intel (base/4.14)
+patch patches/common/0001-PM-domains-Rework-governor-code-to-be-more-consisten.patch
+patch patches/common/0002-PM-QoS-Fix-device-resume-latency-framework.patch
+patch patches/common/0003-Sometimes-it-is-beneficial-to-be-able-to-park-the-gp.patch
+patch patches/common/0004-UPSTREAM-i195-Enable-modification-of-CLOS-via-debugf.patch

@@ -1,0 +1,44 @@
+From 096e3938131151aa2e2193de735cfcd09577bae9 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:13:34 +0200
+Subject: [PATCH 008/137] lib/smp_processor_id: ipipe: exclude head domain from
+ preemption check
+
+There can be no CPU migration from the head stage, however the
+out-of-band code currently running smp_processor_id() might have
+preempted the regular kernel code from within a preemptible section,
+which might cause false positive in the end.
+
+These are the two reasons why we certainly neither need nor want to do
+the preemption check in that case.
+---
+ lib/smp_processor_id.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/lib/smp_processor_id.c b/lib/smp_processor_id.c
+index 835cc6d..2de29f8 100644
+--- a/lib/smp_processor_id.c
++++ b/lib/smp_processor_id.c
+@@ -7,12 +7,19 @@
+ #include <linux/export.h>
+ #include <linux/kallsyms.h>
+ #include <linux/sched.h>
++#include <linux/ipipe.h>
+ 
+ notrace static unsigned int check_preemption_disabled(const char *what1,
+ 							const char *what2)
+ {
+ 	int this_cpu = raw_smp_processor_id();
+ 
++	if (hard_irqs_disabled())
++		goto out;
++
++	if (!ipipe_root_p)
++		goto out;
++
+ 	if (likely(preempt_count()))
+ 		goto out;
+ 
+-- 
+1.9.1
+

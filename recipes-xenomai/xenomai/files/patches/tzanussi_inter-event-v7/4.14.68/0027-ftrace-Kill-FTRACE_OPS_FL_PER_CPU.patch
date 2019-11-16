@@ -1,0 +1,265 @@
+From 8a4d1d8041c94b3f611f2413e4c0e701cb06d11e Mon Sep 17 00:00:00 2001
+From: Peter Zijlstra <peterz@infradead.org>
+Date: Wed, 11 Oct 2017 09:45:32 +0200
+Subject: [PATCH 27/66] ftrace: Kill FTRACE_OPS_FL_PER_CPU
+
+The one and only user of FTRACE_OPS_FL_PER_CPU is gone, remove the
+lot.
+
+Link: http://lkml.kernel.org/r/20171011080224.372422809@infradead.org
+
+Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/linux/ftrace.h | 83 +++++++++-----------------------------------------
+ kernel/trace/ftrace.c  | 55 ++++-----------------------------
+ 2 files changed, 20 insertions(+), 118 deletions(-)
+
+diff --git a/include/linux/ftrace.h b/include/linux/ftrace.h
+index 8dceb6b..2bab819 100644
+--- a/include/linux/ftrace.h
++++ b/include/linux/ftrace.h
+@@ -103,10 +103,6 @@ typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
+  * ENABLED - set/unset when ftrace_ops is registered/unregistered
+  * DYNAMIC - set when ftrace_ops is registered to denote dynamically
+  *           allocated ftrace_ops which need special care
+- * PER_CPU - set manualy by ftrace_ops user to denote the ftrace_ops
+- *           could be controlled by following calls:
+- *             ftrace_function_local_enable
+- *             ftrace_function_local_disable
+  * SAVE_REGS - The ftrace_ops wants regs saved at each function called
+  *            and passed to the callback. If this flag is set, but the
+  *            architecture does not support passing regs
+@@ -150,21 +146,20 @@ typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
+ enum {
+ 	FTRACE_OPS_FL_ENABLED			= 1 << 0,
+ 	FTRACE_OPS_FL_DYNAMIC			= 1 << 1,
+-	FTRACE_OPS_FL_PER_CPU			= 1 << 2,
+-	FTRACE_OPS_FL_SAVE_REGS			= 1 << 3,
+-	FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED	= 1 << 4,
+-	FTRACE_OPS_FL_RECURSION_SAFE		= 1 << 5,
+-	FTRACE_OPS_FL_STUB			= 1 << 6,
+-	FTRACE_OPS_FL_INITIALIZED		= 1 << 7,
+-	FTRACE_OPS_FL_DELETED			= 1 << 8,
+-	FTRACE_OPS_FL_ADDING			= 1 << 9,
+-	FTRACE_OPS_FL_REMOVING			= 1 << 10,
+-	FTRACE_OPS_FL_MODIFYING			= 1 << 11,
+-	FTRACE_OPS_FL_ALLOC_TRAMP		= 1 << 12,
+-	FTRACE_OPS_FL_IPMODIFY			= 1 << 13,
+-	FTRACE_OPS_FL_PID			= 1 << 14,
+-	FTRACE_OPS_FL_RCU			= 1 << 15,
+-	FTRACE_OPS_FL_TRACE_ARRAY		= 1 << 16,
++	FTRACE_OPS_FL_SAVE_REGS			= 1 << 2,
++	FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED	= 1 << 3,
++	FTRACE_OPS_FL_RECURSION_SAFE		= 1 << 4,
++	FTRACE_OPS_FL_STUB			= 1 << 5,
++	FTRACE_OPS_FL_INITIALIZED		= 1 << 6,
++	FTRACE_OPS_FL_DELETED			= 1 << 7,
++	FTRACE_OPS_FL_ADDING			= 1 << 8,
++	FTRACE_OPS_FL_REMOVING			= 1 << 9,
++	FTRACE_OPS_FL_MODIFYING			= 1 << 10,
++	FTRACE_OPS_FL_ALLOC_TRAMP		= 1 << 11,
++	FTRACE_OPS_FL_IPMODIFY			= 1 << 12,
++	FTRACE_OPS_FL_PID			= 1 << 13,
++	FTRACE_OPS_FL_RCU			= 1 << 14,
++	FTRACE_OPS_FL_TRACE_ARRAY		= 1 << 15,
+ };
+ 
+ #ifdef CONFIG_DYNAMIC_FTRACE
+@@ -199,7 +194,6 @@ struct ftrace_ops {
+ 	unsigned long			flags;
+ 	void				*private;
+ 	ftrace_func_t			saved_func;
+-	int __percpu			*disabled;
+ #ifdef CONFIG_DYNAMIC_FTRACE
+ 	struct ftrace_ops_hash		local_hash;
+ 	struct ftrace_ops_hash		*func_hash;
+@@ -231,55 +225,6 @@ enum ftrace_tracing_type_t {
+ int unregister_ftrace_function(struct ftrace_ops *ops);
+ void clear_ftrace_function(void);
+ 
+-/**
+- * ftrace_function_local_enable - enable ftrace_ops on current cpu
+- *
+- * This function enables tracing on current cpu by decreasing
+- * the per cpu control variable.
+- * It must be called with preemption disabled and only on ftrace_ops
+- * registered with FTRACE_OPS_FL_PER_CPU. If called without preemption
+- * disabled, this_cpu_ptr will complain when CONFIG_DEBUG_PREEMPT is enabled.
+- */
+-static inline void ftrace_function_local_enable(struct ftrace_ops *ops)
+-{
+-	if (WARN_ON_ONCE(!(ops->flags & FTRACE_OPS_FL_PER_CPU)))
+-		return;
+-
+-	(*this_cpu_ptr(ops->disabled))--;
+-}
+-
+-/**
+- * ftrace_function_local_disable - disable ftrace_ops on current cpu
+- *
+- * This function disables tracing on current cpu by increasing
+- * the per cpu control variable.
+- * It must be called with preemption disabled and only on ftrace_ops
+- * registered with FTRACE_OPS_FL_PER_CPU. If called without preemption
+- * disabled, this_cpu_ptr will complain when CONFIG_DEBUG_PREEMPT is enabled.
+- */
+-static inline void ftrace_function_local_disable(struct ftrace_ops *ops)
+-{
+-	if (WARN_ON_ONCE(!(ops->flags & FTRACE_OPS_FL_PER_CPU)))
+-		return;
+-
+-	(*this_cpu_ptr(ops->disabled))++;
+-}
+-
+-/**
+- * ftrace_function_local_disabled - returns ftrace_ops disabled value
+- *                                  on current cpu
+- *
+- * This function returns value of ftrace_ops::disabled on current cpu.
+- * It must be called with preemption disabled and only on ftrace_ops
+- * registered with FTRACE_OPS_FL_PER_CPU. If called without preemption
+- * disabled, this_cpu_ptr will complain when CONFIG_DEBUG_PREEMPT is enabled.
+- */
+-static inline int ftrace_function_local_disabled(struct ftrace_ops *ops)
+-{
+-	WARN_ON_ONCE(!(ops->flags & FTRACE_OPS_FL_PER_CPU));
+-	return *this_cpu_ptr(ops->disabled);
+-}
+-
+ extern void ftrace_stub(unsigned long a0, unsigned long a1,
+ 			struct ftrace_ops *op, struct pt_regs *regs);
+ 
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index d083120..e188085 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -203,30 +203,6 @@ void clear_ftrace_function(void)
+ 	ftrace_trace_function = ftrace_stub;
+ }
+ 
+-static void per_cpu_ops_disable_all(struct ftrace_ops *ops)
+-{
+-	int cpu;
+-
+-	for_each_possible_cpu(cpu)
+-		*per_cpu_ptr(ops->disabled, cpu) = 1;
+-}
+-
+-static int per_cpu_ops_alloc(struct ftrace_ops *ops)
+-{
+-	int __percpu *disabled;
+-
+-	if (WARN_ON_ONCE(!(ops->flags & FTRACE_OPS_FL_PER_CPU)))
+-		return -EINVAL;
+-
+-	disabled = alloc_percpu(int);
+-	if (!disabled)
+-		return -ENOMEM;
+-
+-	ops->disabled = disabled;
+-	per_cpu_ops_disable_all(ops);
+-	return 0;
+-}
+-
+ static void ftrace_sync(struct work_struct *work)
+ {
+ 	/*
+@@ -262,8 +238,8 @@ static ftrace_func_t ftrace_ops_get_list_func(struct ftrace_ops *ops)
+ 	 * If this is a dynamic, RCU, or per CPU ops, or we force list func,
+ 	 * then it needs to call the list anyway.
+ 	 */
+-	if (ops->flags & (FTRACE_OPS_FL_DYNAMIC | FTRACE_OPS_FL_PER_CPU |
+-			  FTRACE_OPS_FL_RCU) || FTRACE_FORCE_LIST_FUNC)
++	if (ops->flags & (FTRACE_OPS_FL_DYNAMIC | FTRACE_OPS_FL_RCU) ||
++	    FTRACE_FORCE_LIST_FUNC)
+ 		return ftrace_ops_list_func;
+ 
+ 	return ftrace_ops_get_func(ops);
+@@ -422,11 +398,6 @@ static int __register_ftrace_function(struct ftrace_ops *ops)
+ 	if (!core_kernel_data((unsigned long)ops))
+ 		ops->flags |= FTRACE_OPS_FL_DYNAMIC;
+ 
+-	if (ops->flags & FTRACE_OPS_FL_PER_CPU) {
+-		if (per_cpu_ops_alloc(ops))
+-			return -ENOMEM;
+-	}
+-
+ 	add_ftrace_ops(&ftrace_ops_list, ops);
+ 
+ 	/* Always save the function, and reset at unregistering */
+@@ -2727,11 +2698,6 @@ void __weak arch_ftrace_trampoline_free(struct ftrace_ops *ops)
+ {
+ }
+ 
+-static void per_cpu_ops_free(struct ftrace_ops *ops)
+-{
+-	free_percpu(ops->disabled);
+-}
+-
+ static void ftrace_startup_enable(int command)
+ {
+ 	if (saved_ftrace_func != ftrace_trace_function) {
+@@ -2833,7 +2799,7 @@ static int ftrace_shutdown(struct ftrace_ops *ops, int command)
+ 		 * not currently active, we can just free them
+ 		 * without synchronizing all CPUs.
+ 		 */
+-		if (ops->flags & (FTRACE_OPS_FL_DYNAMIC | FTRACE_OPS_FL_PER_CPU))
++		if (ops->flags & FTRACE_OPS_FL_DYNAMIC)
+ 			goto free_ops;
+ 
+ 		return 0;
+@@ -2880,7 +2846,7 @@ static int ftrace_shutdown(struct ftrace_ops *ops, int command)
+ 	 * The same goes for freeing the per_cpu data of the per_cpu
+ 	 * ops.
+ 	 */
+-	if (ops->flags & (FTRACE_OPS_FL_DYNAMIC | FTRACE_OPS_FL_PER_CPU)) {
++	if (ops->flags & FTRACE_OPS_FL_DYNAMIC) {
+ 		/*
+ 		 * We need to do a hard force of sched synchronization.
+ 		 * This is because we use preempt_disable() to do RCU, but
+@@ -2903,9 +2869,6 @@ static int ftrace_shutdown(struct ftrace_ops *ops, int command)
+ 
+  free_ops:
+ 		arch_ftrace_trampoline_free(ops);
+-
+-		if (ops->flags & FTRACE_OPS_FL_PER_CPU)
+-			per_cpu_ops_free(ops);
+ 	}
+ 
+ 	return 0;
+@@ -6351,10 +6314,7 @@ void ftrace_reset_array_ops(struct trace_array *tr)
+ 		 * If any of the above fails then the op->func() is not executed.
+ 		 */
+ 		if ((!(op->flags & FTRACE_OPS_FL_RCU) || rcu_is_watching()) &&
+-		    (!(op->flags & FTRACE_OPS_FL_PER_CPU) ||
+-		     !ftrace_function_local_disabled(op)) &&
+ 		    ftrace_ops_test(op, ip, regs)) {
+-		    
+ 			if (FTRACE_WARN_ON(!op->func)) {
+ 				pr_warn("op=%p %pS\n", op, op);
+ 				goto out;
+@@ -6412,10 +6372,7 @@ static void ftrace_ops_assist_func(unsigned long ip, unsigned long parent_ip,
+ 
+ 	preempt_disable_notrace();
+ 
+-	if (!(op->flags & FTRACE_OPS_FL_PER_CPU) ||
+-	    !ftrace_function_local_disabled(op)) {
+-		op->func(ip, parent_ip, op, regs);
+-	}
++	op->func(ip, parent_ip, op, regs);
+ 
+ 	preempt_enable_notrace();
+ 	trace_clear_recursion(bit);
+@@ -6439,7 +6396,7 @@ ftrace_func_t ftrace_ops_get_func(struct ftrace_ops *ops)
+ 	 * or does per cpu logic, then we need to call the assist handler.
+ 	 */
+ 	if (!(ops->flags & FTRACE_OPS_FL_RECURSION_SAFE) ||
+-	    ops->flags & (FTRACE_OPS_FL_RCU | FTRACE_OPS_FL_PER_CPU))
++	    ops->flags & FTRACE_OPS_FL_RCU)
+ 		return ftrace_ops_assist_func;
+ 
+ 	return ops->func;
+-- 
+1.9.1
+

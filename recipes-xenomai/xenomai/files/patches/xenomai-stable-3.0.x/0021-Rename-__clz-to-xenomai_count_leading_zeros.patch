@@ -1,0 +1,45 @@
+From bc53d03ff77990b44430014a7967b1a6c39c8010 Mon Sep 17 00:00:00 2001
+From: Giulio Moro <giuliomoro@yahoo.it>
+Date: Thu, 22 Nov 2018 12:41:26 +0000
+Subject: [PATCH 21/21] Rename __clz to xenomai_count_leading_zeros
+
+This is to avoid namespace conflicts (e.g.: with Clang's arm_acle.h)
+
+Signed-off-by: Giulio Moro <giuliomoro@yahoo.it>
+[Jan: back-ported to 3.0.x]
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ include/boilerplate/compiler.h    | 2 +-
+ lib/copperplate/heapobj-pshared.c | 3 ++-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/include/boilerplate/compiler.h b/include/boilerplate/compiler.h
+index bcef7d4..846cd79 100644
+--- a/include/boilerplate/compiler.h
++++ b/include/boilerplate/compiler.h
+@@ -83,7 +83,7 @@ void __invalid_operand_size(void);
+ 		__ret;							\
+ 	})
+ 
+-#define __clz(__v)							\
++#define xenomai_count_leading_zeros(__v)				\
+ 	({								\
+ 		int __ret;						\
+ 		if (!__v)						\
+diff --git a/lib/copperplate/heapobj-pshared.c b/lib/copperplate/heapobj-pshared.c
+index d4324df..0d640ca 100644
+--- a/lib/copperplate/heapobj-pshared.c
++++ b/lib/copperplate/heapobj-pshared.c
+@@ -439,7 +439,8 @@ static void *alloc_block(struct shared_heap *heap, size_t size)
+ 	 */
+ 	if (size <= HOBJ_PAGE_SIZE * 2) {
+ 		/* Find log2(size). */
+-		log2size = sizeof(size) * 8 - 1 - __clz(size);
++		log2size = sizeof(size) * 8 - 1 -
++			xenomai_count_leading_zeros(size);
+ 		if (size & (size - 1))
+ 			log2size++;
+ 		/* That is the actual block size we need. */
+-- 
+1.9.1
+

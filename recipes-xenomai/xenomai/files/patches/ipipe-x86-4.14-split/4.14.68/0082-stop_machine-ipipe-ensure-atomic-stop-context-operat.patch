@@ -1,0 +1,88 @@
+From 3a4551e11c4fef86c66395306ded1c0bb72a8c4d Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 7 Mar 2017 17:38:16 +0100
+Subject: [PATCH 082/137] stop_machine: ipipe: ensure atomic stop-context
+ operations
+
+stop_machine() guarantees that all online CPUs are spinning
+non-preemptible in a known code location before a subset of them may
+safely run a stop-context function. This service is typically useful
+for live patching the kernel code, or changing global memory mappings,
+so that no activity could run in parallel until the system has
+returned to a stable state after all stop-context operations have
+completed.
+
+When interrupt pipelining is enabled, we have to provide the same
+guarantee by restoring hard interrupt disabling where virtualizing the
+interrupt disable flag would defeat it.
+---
+ include/linux/interrupt.h    | 17 +++++++++++++++++
+ include/linux/stop_machine.h |  2 ++
+ kernel/stop_machine.c        |  2 ++
+ 3 files changed, 21 insertions(+)
+
+diff --git a/include/linux/interrupt.h b/include/linux/interrupt.h
+index 69c2382..24d95e3 100644
+--- a/include/linux/interrupt.h
++++ b/include/linux/interrupt.h
+@@ -449,6 +449,23 @@ extern int irq_set_irqchip_state(unsigned int irq, enum irqchip_irq_state which,
+ #define hard_irq_disable()	do { } while(0)
+ #endif
+ 
++/*
++ * Unlike other virtualized interrupt disabling schemes may assume, we
++ * can't expect local_irq_restore() to turn hard interrupts on when
++ * pipelining.  hard_irq_enable() is introduced to be paired with
++ * hard_irq_disable(), for unconditionally turning them on. The only
++ * sane sequence mixing virtual and real disable state manipulation
++ * is:
++ *
++ * 1. local_irq_save/disable
++ * 2. hard_irq_disable
++ * 3. hard_irq_enable
++ * 4. local_irq_restore/enable
++ */
++#ifndef hard_irq_enable
++#define hard_irq_enable()	hard_cond_local_irq_enable()
++#endif
++
+ /* PLEASE, avoid to allocate new softirqs, if you need not _really_ high
+    frequency threaded job scheduling. For almost all the purposes
+    tasklets are more than enough. F.e. all serial device BHs et
+diff --git a/include/linux/stop_machine.h b/include/linux/stop_machine.h
+index 6d3635c..dc0e35d 100644
+--- a/include/linux/stop_machine.h
++++ b/include/linux/stop_machine.h
+@@ -144,7 +144,9 @@ static inline int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data,
+ 	unsigned long flags;
+ 	int ret;
+ 	local_irq_save(flags);
++	hard_irq_disable();
+ 	ret = fn(data);
++	hard_irq_enable();
+ 	local_irq_restore(flags);
+ 	return ret;
+ }
+diff --git a/kernel/stop_machine.c b/kernel/stop_machine.c
+index 067cb83..e2cc69d 100644
+--- a/kernel/stop_machine.c
++++ b/kernel/stop_machine.c
+@@ -227,6 +227,7 @@ static int multi_cpu_stop(void *data)
+ 		}
+ 	} while (curstate != MULTI_STOP_EXIT);
+ 
++	hard_irq_enable();
+ 	local_irq_restore(flags);
+ 	return err;
+ }
+@@ -606,6 +607,7 @@ int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data,
+ 		local_irq_save(flags);
+ 		hard_irq_disable();
+ 		ret = (*fn)(data);
++		hard_irq_enable();
+ 		local_irq_restore(flags);
+ 
+ 		return ret;
+-- 
+1.9.1
+

@@ -1,0 +1,49 @@
+From e6486c0dd445697db88cebee6a132dec682857fe Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 17:29:33 +0100
+Subject: [PATCH 060/137] irqchip: versatile-fpga: ipipe: enable interrupt
+ pipelining
+
+Fix up the Versatile FPGA interrupt controller driver in order to
+channel interrupts through the interrupt pipeline.
+---
+ drivers/irqchip/irq-versatile-fpga.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/irqchip/irq-versatile-fpga.c b/drivers/irqchip/irq-versatile-fpga.c
+index 928858d..0f5dc81 100644
+--- a/drivers/irqchip/irq-versatile-fpga.c
++++ b/drivers/irqchip/irq-versatile-fpga.c
+@@ -80,7 +80,7 @@ static void fpga_irq_handle(struct irq_desc *desc)
+ 		unsigned int irq = ffs(status) - 1;
+ 
+ 		status &= ~(1 << irq);
+-		generic_handle_irq(irq_find_mapping(f->domain, irq));
++		ipipe_handle_demuxed_irq(irq_find_mapping(f->domain, irq));
+ 	} while (status);
+ }
+ 
+@@ -97,7 +97,7 @@ static int handle_one_fpga(struct fpga_irq_data *f, struct pt_regs *regs)
+ 
+ 	while ((status  = readl(f->base + IRQ_STATUS))) {
+ 		irq = ffs(status) - 1;
+-		handle_domain_irq(f->domain, irq, regs);
++		ipipe_handle_domain_irq(f->domain, irq, regs);
+ 		handled = 1;
+ 	}
+ 
+@@ -153,7 +153,11 @@ void __init fpga_irq_init(void __iomem *base, const char *name, int irq_start,
+ 	f->chip.name = name;
+ 	f->chip.irq_ack = fpga_irq_mask;
+ 	f->chip.irq_mask = fpga_irq_mask;
++#ifdef CONFIG_IPIPE
++	f->chip.irq_mask_ack = fpga_irq_mask;
++#endif
+ 	f->chip.irq_unmask = fpga_irq_unmask;
++	f->chip.flags = IRQCHIP_PIPELINE_SAFE;
+ 	f->valid = valid;
+ 
+ 	if (parent_irq != -1) {
+-- 
+1.9.1
+

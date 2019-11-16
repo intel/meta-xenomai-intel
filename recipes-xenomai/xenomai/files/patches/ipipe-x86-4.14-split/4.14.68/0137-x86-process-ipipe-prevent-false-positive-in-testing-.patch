@@ -1,0 +1,32 @@
+From acf8c9b33a57fcdc96324a1ea6a820872c9c3338 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 25 Oct 2018 15:04:30 +0200
+Subject: [PATCH 137/137] x86/process: ipipe: prevent false positive in testing
+ for preemptible section
+
+We may call switch_to_bitmap() from the head stage when a co-kernel
+switches to a new thread context, in which case IRQs are hard
+disabled, although the root stage might be unstalled.
+
+Make sure the preemption debug code in refresh_tss_limit() is aware of
+this.
+---
+ arch/x86/include/asm/desc.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/desc.h b/arch/x86/include/asm/desc.h
+index 0e3758c..7a4cb43 100644
+--- a/arch/x86/include/asm/desc.h
++++ b/arch/x86/include/asm/desc.h
+@@ -309,7 +309,7 @@ static inline void force_reload_TR(void)
+  */
+ static inline void refresh_tss_limit(void)
+ {
+-	DEBUG_LOCKS_WARN_ON(preemptible());
++	DEBUG_LOCKS_WARN_ON(!hard_irqs_disabled() && preemptible());
+ 
+ 	if (unlikely(this_cpu_read(__tss_limit_invalid)))
+ 		force_reload_TR();
+-- 
+1.9.1
+

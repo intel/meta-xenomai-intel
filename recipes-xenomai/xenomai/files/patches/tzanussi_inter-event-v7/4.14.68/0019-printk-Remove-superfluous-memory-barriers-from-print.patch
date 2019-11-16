@@ -1,0 +1,67 @@
+From 40f822dd5fc04018e24b98180bd14af590c31175 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Wed, 11 Oct 2017 12:46:47 -0400
+Subject: [PATCH 19/66] printk: Remove superfluous memory barriers from
+ printk_safe
+
+The variable printk_safe_irq_ready is set and never cleared at system
+boot up, when there's only one CPU active. It is set before other
+CPUs come on line. Also, it is extremely unlikely that an NMI would
+trigger this early in boot up (which I wonder why we even have this
+variable at all).
+
+Also mark the printk_safe_irq_ready as read mostly, as it is set at
+system boot up, and never touched again.
+
+Link: http://lkml.kernel.org/r/20171011124647.7781f98f@gandalf.local.home
+
+Reviewed-by: Petr Mladek <pmladek@suse.com>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ kernel/printk/printk_safe.c | 15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/kernel/printk/printk_safe.c b/kernel/printk/printk_safe.c
+index d482fd6..b5ad20e 100644
+--- a/kernel/printk/printk_safe.c
++++ b/kernel/printk/printk_safe.c
+@@ -39,7 +39,7 @@
+  * There are situations when we want to make sure that all buffers
+  * were handled or when IRQs are blocked.
+  */
+-static int printk_safe_irq_ready;
++static int printk_safe_irq_ready __read_mostly;
+ 
+ #define SAFE_LOG_BUF_LEN ((1 << CONFIG_PRINTK_SAFE_LOG_BUF_SHIFT) -	\
+ 				sizeof(atomic_t) -			\
+@@ -63,11 +63,8 @@ struct printk_safe_seq_buf {
+ /* Get flushed in a more safe context. */
+ static void queue_flush_work(struct printk_safe_seq_buf *s)
+ {
+-	if (printk_safe_irq_ready) {
+-		/* Make sure that IRQ work is really initialized. */
+-		smp_rmb();
++	if (printk_safe_irq_ready)
+ 		irq_work_queue(&s->work);
+-	}
+ }
+ 
+ /*
+@@ -417,8 +414,12 @@ void __init printk_safe_init(void)
+ #endif
+ 	}
+ 
+-	/* Make sure that IRQ works are initialized before enabling. */
+-	smp_wmb();
++	/*
++	 * In the highly unlikely event that a NMI were to trigger at
++	 * this moment. Make sure IRQ work is set up before this
++	 * variable is set.
++	 */
++	barrier();
+ 	printk_safe_irq_ready = 1;
+ 
+ 	/* Flush pending messages that did not have scheduled IRQ works. */
+-- 
+1.9.1
+

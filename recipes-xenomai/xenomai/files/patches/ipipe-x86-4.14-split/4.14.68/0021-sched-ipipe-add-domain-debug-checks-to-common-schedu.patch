@@ -1,0 +1,49 @@
+From e9bcc4cdb44e4647b00d47166edac8cf2dbf9c84 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 5 Jul 2018 08:34:48 +0200
+Subject: [PATCH 021/137] sched: ipipe: add domain debug checks to common
+ scheduling paths
+
+Catch invalid calls of root-only code from the head domain from common
+paths which may lead to blocking the current task linux-wise. Checks
+are enabled by CONFIG_IPIPE_DEBUG_CONTEXT.
+---
+ include/linux/kernel.h | 7 +++++--
+ kernel/sched/wait.c    | 2 ++
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/kernel.h b/include/linux/kernel.h
+index 4b484ab..8a730fa 100644
+--- a/include/linux/kernel.h
++++ b/include/linux/kernel.h
+@@ -205,9 +205,12 @@
+ 
+ #ifdef CONFIG_PREEMPT_VOLUNTARY
+ extern int _cond_resched(void);
+-# define might_resched() _cond_resched()
++# define might_resched() do { \
++		ipipe_root_only(); \
++		_cond_resched(); \
++	} while (0)
+ #else
+-# define might_resched() do { } while (0)
++# define might_resched() ipipe_root_only()
+ #endif
+ 
+ #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
+diff --git a/kernel/sched/wait.c b/kernel/sched/wait.c
+index 929ecb7..e409fe7 100644
+--- a/kernel/sched/wait.c
++++ b/kernel/sched/wait.c
+@@ -84,6 +84,8 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
+ 	} else
+ 		curr = list_first_entry(&wq_head->head, wait_queue_entry_t, entry);
+ 
++	ipipe_root_only();
++
+ 	if (&curr->entry == &wq_head->head)
+ 		return nr_exclusive;
+ 
+-- 
+1.9.1
+

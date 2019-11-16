@@ -1,0 +1,79 @@
+From e97d599fc933a2b274d10b518baf4f6dafac485e Mon Sep 17 00:00:00 2001
+From: Joel Fernandes <joelaf@google.com>
+Date: Fri, 8 Sep 2017 23:55:17 -0700
+Subject: [PATCH 01/66] tracing: Remove obsolete sched_switch tracer selftest
+
+Since commit 87d80de2800d087ea833cb79bc13f85ff34ed49f ("tracing: Remove
+obsolete sched_switch tracer"), the sched_switch tracer selftest is no longer
+used.  This patch removes the same.
+
+Link: http://lkml.kernel.org/r/20170909065517.22262-1-joelaf@google.com
+
+Cc: Ingo Molnar <mingo@redhat.com>
+Cc: kernel-team@android.com
+Signed-off-by: Joel Fernandes <joelaf@google.com>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ kernel/trace/trace.h          |  2 --
+ kernel/trace/trace_selftest.c | 32 --------------------------------
+ 2 files changed, 34 deletions(-)
+
+diff --git a/kernel/trace/trace.h b/kernel/trace/trace.h
+index 851cd16..dbdb7d5 100644
+--- a/kernel/trace/trace.h
++++ b/kernel/trace/trace.h
+@@ -739,8 +739,6 @@ extern int trace_selftest_startup_wakeup(struct tracer *trace,
+ 					 struct trace_array *tr);
+ extern int trace_selftest_startup_nop(struct tracer *trace,
+ 					 struct trace_array *tr);
+-extern int trace_selftest_startup_sched_switch(struct tracer *trace,
+-					       struct trace_array *tr);
+ extern int trace_selftest_startup_branch(struct tracer *trace,
+ 					 struct trace_array *tr);
+ /*
+diff --git a/kernel/trace/trace_selftest.c b/kernel/trace/trace_selftest.c
+index cd70eb5..2b5a6f5 100644
+--- a/kernel/trace/trace_selftest.c
++++ b/kernel/trace/trace_selftest.c
+@@ -1151,38 +1151,6 @@ static int trace_wakeup_test_thread(void *data)
+ }
+ #endif /* CONFIG_SCHED_TRACER */
+ 
+-#ifdef CONFIG_CONTEXT_SWITCH_TRACER
+-int
+-trace_selftest_startup_sched_switch(struct tracer *trace, struct trace_array *tr)
+-{
+-	unsigned long count;
+-	int ret;
+-
+-	/* start the tracing */
+-	ret = tracer_init(trace, tr);
+-	if (ret) {
+-		warn_failed_init_tracer(trace, ret);
+-		return ret;
+-	}
+-
+-	/* Sleep for a 1/10 of a second */
+-	msleep(100);
+-	/* stop the tracing. */
+-	tracing_stop();
+-	/* check the trace buffer */
+-	ret = trace_test_buffer(&tr->trace_buffer, &count);
+-	trace->reset(tr);
+-	tracing_start();
+-
+-	if (!ret && !count) {
+-		printk(KERN_CONT ".. no entries found ..");
+-		ret = -1;
+-	}
+-
+-	return ret;
+-}
+-#endif /* CONFIG_CONTEXT_SWITCH_TRACER */
+-
+ #ifdef CONFIG_BRANCH_TRACER
+ int
+ trace_selftest_startup_branch(struct tracer *trace, struct trace_array *tr)
+-- 
+1.9.1
+

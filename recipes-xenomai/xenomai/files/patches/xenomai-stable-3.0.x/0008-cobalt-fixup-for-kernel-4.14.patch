@@ -1,0 +1,31 @@
+From b5383337a3c7daaec22b2e8234998db98ac9b35c Mon Sep 17 00:00:00 2001
+From: Henning Schild <henning.schild@siemens.com>
+Date: Fri, 14 Sep 2018 17:10:17 +0200
+Subject: [PATCH 08/21] cobalt: fixup for kernel 4.14+
+
+Signed-off-by: Henning Schild <henning.schild@siemens.com>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/include/asm-generic/xenomai/syscall.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/kernel/cobalt/include/asm-generic/xenomai/syscall.h b/kernel/cobalt/include/asm-generic/xenomai/syscall.h
+index f11ade8..3873fa6 100644
+--- a/kernel/cobalt/include/asm-generic/xenomai/syscall.h
++++ b/kernel/cobalt/include/asm-generic/xenomai/syscall.h
+@@ -20,7 +20,12 @@
+ #define _COBALT_ASM_GENERIC_SYSCALL_H
+ 
+ #include <linux/types.h>
++#include <linux/version.h>
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
+ #include <asm/uaccess.h>
++#else
++#include <linux/uaccess.h>
++#endif
+ #include <asm/xenomai/features.h>
+ #include <asm/xenomai/wrappers.h>
+ #include <asm/xenomai/machine.h>
+-- 
+1.9.1
+

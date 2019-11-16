@@ -1,0 +1,45 @@
+From 39c211b9b95863b8233637b85b94391d28d0485d Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Fri, 13 Oct 2017 10:21:50 -0400
+Subject: [PATCH 28/66] tracing, thermal: Hide devfreq trace events when not in
+ use
+
+As trace events when defined create data structures and functions to
+process them, defining trace events when not using them is a waste of
+memory.
+
+The trace events thermal_power_devfreq_get_power and
+thermal_power_devfreq_limit are only used when CONFIG_DEVFREQ_THERMAL
+is set. Make those events only defined when that is set as well.
+
+Link: http://lkml.kernel.org/r/20171013102150.0050cb74@gandalf.local.home
+
+Acked-by: Javi Merino <javi.merino@kernel.org>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/trace/events/thermal.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/include/trace/events/thermal.h b/include/trace/events/thermal.h
+index 466c09d..6908617 100644
+--- a/include/trace/events/thermal.h
++++ b/include/trace/events/thermal.h
+@@ -149,6 +149,7 @@
+ 		__entry->power)
+ );
+ 
++#ifdef CONFIG_DEVFREQ_THERMAL
+ TRACE_EVENT(thermal_power_devfreq_get_power,
+ 	TP_PROTO(struct thermal_cooling_device *cdev,
+ 		 struct devfreq_dev_status *status, unsigned long freq,
+@@ -204,6 +205,7 @@
+ 		__get_str(type), __entry->freq, __entry->cdev_state,
+ 		__entry->power)
+ );
++#endif /* CONFIG_DEVFREQ_THERMAL */
+ #endif /* _TRACE_THERMAL_H */
+ 
+ /* This part must be outside protection */
+-- 
+1.9.1
+

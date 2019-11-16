@@ -1,0 +1,118 @@
+From fddde89dc0a0f88b4cca8617acaa89a597f30aa3 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Mon, 1 Oct 2018 15:56:15 +0200
+Subject: [PATCH 13/21] cobalt/thread: handle case of invalid domain migration
+ over non-rt CPU
+
+Attempting to migrate to the head domain while running on a CPU which
+is not in part of the real-time set is a bug, and must be detected by
+the core.
+
+Furthermore, for this detection to work, the I-pipe must not BUG()
+unconditionally when failing to schedule out such thread in
+__ipipe_migrate_head(), but rather let the real-time core handle the
+situation (i.e. Xenomai in xnthread_harden()).
+
+Until both changes are in place, running a thread issuing a real-time
+call over a non-RT CPU would trigger a BUG() assertion, e.g.:
+
+With kernel parameter "xenomai.supported_cpus=2", running:
+
+$ switchtest --cpu-affinity=0
+
+would lead to:
+
+[   11.681486] kernel BUG at kernel/sched/core.c:5816!
+[   11.686343] Internal error: Oops - BUG: 0 [#1] PREEMPT SMP ARM
+
+Signed-off-by: Philippe Gerum <rpm@xenomai.org>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/posix/process.c | 19 ++++++++++++-------
+ kernel/cobalt/thread.c        |  1 +
+ 2 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/kernel/cobalt/posix/process.c b/kernel/cobalt/posix/process.c
+index 50f752f..cac570b 100644
+--- a/kernel/cobalt/posix/process.c
++++ b/kernel/cobalt/posix/process.c
+@@ -851,7 +851,7 @@ static int handle_setaffinity_event(struct ipipe_cpu_migration_data *d)
+ 	 * take place on behalf of the target thread itself while
+ 	 * running in secondary mode. Therefore, that thread needs to
+ 	 * go through secondary mode first, then move back to primary
+-	 * mode, so that check_affinity() does the fixup work.
++	 * mode, so that affinity_ok() does the fixup work.
+ 	 *
+ 	 * We force this by sending a SIGSHADOW signal to the migrated
+ 	 * thread, asking it to switch back to primary mode from the
+@@ -868,7 +868,7 @@ static int handle_setaffinity_event(struct ipipe_cpu_migration_data *d)
+ 	return KEVENT_PROPAGATE;
+ }
+ 
+-static inline void check_affinity(struct task_struct *p) /* nklocked, IRQs off */
++static inline bool affinity_ok(struct task_struct *p) /* nklocked, IRQs off */
+ {
+ 	struct xnthread *thread = xnthread_from_task(p);
+ 	struct xnsched *sched;
+@@ -907,12 +907,12 @@ static inline void check_affinity(struct task_struct *p) /* nklocked, IRQs off *
+ 		 * in xnthread_harden().
+ 		 */
+ 		xnthread_set_info(thread, XNCANCELD);
+-		return;
++		return false;
+ 	}
+ 
+ 	sched = xnsched_struct(cpu);
+ 	if (sched == thread->sched)
+-		return;
++		return true;
+ 
+ 	/*
+ 	 * The current thread moved to a supported real-time CPU,
+@@ -924,6 +924,8 @@ static inline void check_affinity(struct task_struct *p) /* nklocked, IRQs off *
+ 
+ 	xnthread_run_handler_stack(thread, move_thread, cpu);
+ 	xnthread_migrate_passive(thread, sched);
++
++	return true;
+ }
+ 
+ #else /* !CONFIG_SMP */
+@@ -935,7 +937,10 @@ static int handle_setaffinity_event(struct ipipe_cpu_migration_data *d)
+ 	return KEVENT_PROPAGATE;
+ }
+ 
+-static inline void check_affinity(struct task_struct *p) { }
++static inline bool affinity_ok(struct task_struct *p)
++{
++	return true;
++}
+ 
+ #endif /* CONFIG_SMP */
+ 
+@@ -950,8 +955,8 @@ void ipipe_migration_hook(struct task_struct *p) /* hw IRQs off */
+ 	 */
+ 	xnlock_get(&nklock);
+ 	xnthread_run_handler_stack(thread, harden_thread);
+-	check_affinity(p);
+-	xnthread_resume(thread, XNRELAX);
++	if (affinity_ok(p))
++		xnthread_resume(thread, XNRELAX);
+ 	xnlock_put(&nklock);
+ 
+ 	xnsched_run();
+diff --git a/kernel/cobalt/thread.c b/kernel/cobalt/thread.c
+index 05e31db..5eb2d3c 100644
+--- a/kernel/cobalt/thread.c
++++ b/kernel/cobalt/thread.c
+@@ -1924,6 +1924,7 @@ int xnthread_harden(void)
+ 
+ 	ret = __ipipe_migrate_head();
+ 	if (ret) {
++		xnthread_test_cancel();
+ 		xnthread_set_sync_window(thread, XNRELAX);
+ 		return ret;
+ 	}
+-- 
+1.9.1
+

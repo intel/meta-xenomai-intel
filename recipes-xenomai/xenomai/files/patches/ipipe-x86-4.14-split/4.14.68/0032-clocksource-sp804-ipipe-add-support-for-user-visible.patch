@@ -1,0 +1,155 @@
+From ac0b4f8824f379cf729a50085db4169cb03feac0 Mon Sep 17 00:00:00 2001
+From: Gilles Chanteperdrix <gilles.chanteperdrix@xenomai.org>
+Date: Sun, 3 Dec 2017 18:18:16 +0100
+Subject: [PATCH 032/137] clocksource: sp804: ipipe: add support for
+ user-visible TSC
+
+Expose the clocksource to userland processes via the ARM-specific
+user-TSC interface.
+---
+ drivers/clocksource/timer-sp804.c | 35 ++++++++++++++++++++++++++++++++---
+ include/clocksource/timer-sp804.h |  9 ++++++---
+ 2 files changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/clocksource/timer-sp804.c b/drivers/clocksource/timer-sp804.c
+index 3ac9dec..734ea51 100644
+--- a/drivers/clocksource/timer-sp804.c
++++ b/drivers/clocksource/timer-sp804.c
+@@ -29,11 +29,25 @@
+ #include <linux/of_address.h>
+ #include <linux/of_irq.h>
+ #include <linux/sched_clock.h>
++#include <linux/module.h>
++#include <linux/ipipe.h>
++#include <linux/ipipe_tickdev.h>
+ 
+ #include <clocksource/timer-sp804.h>
+ 
+ #include "timer-sp.h"
+ 
++#ifdef CONFIG_IPIPE
++static struct __ipipe_tscinfo tsc_info = {
++	.type = IPIPE_TSC_TYPE_FREERUNNING_COUNTDOWN,
++	.u = {
++		{
++			.mask = 0xffffffff,
++		},
++	},
++};
++#endif /* CONFIG_IPIPE */
++
+ static long __init sp804_get_clock_rate(struct clk *clk)
+ {
+ 	long rate;
+@@ -78,6 +92,7 @@ void __init sp804_timer_disable(void __iomem *base)
+ }
+ 
+ int  __init __sp804_clocksource_and_sched_clock_init(void __iomem *base,
++						     unsigned long phys,
+ 						     const char *name,
+ 						     struct clk *clk,
+ 						     int use_sched_clock)
+@@ -112,6 +127,12 @@ int  __init __sp804_clocksource_and_sched_clock_init(void __iomem *base,
+ 		sched_clock_register(sp804_read, 32, rate);
+ 	}
+ 
++#ifdef CONFIG_IPIPE
++	tsc_info.freq = rate;
++	tsc_info.counter_vaddr = (unsigned long)base + TIMER_VALUE;
++	tsc_info.u.counter_paddr = phys + TIMER_VALUE;
++	__ipipe_tsc_register(&tsc_info);
++#endif
+ 	return 0;
+ }
+ 
+@@ -226,6 +247,7 @@ static int __init sp804_of_init(struct device_node *np)
+ 	u32 irq_num = 0;
+ 	struct clk *clk1, *clk2;
+ 	const char *name = of_get_property(np, "compatible", NULL);
++	struct resource res;
+ 
+ 	base = of_iomap(np, 0);
+ 	if (!base)
+@@ -259,6 +281,9 @@ static int __init sp804_of_init(struct device_node *np)
+ 	if (irq <= 0)
+ 		goto err;
+ 
++	if (of_address_to_resource(np, 0, &res))
++	    res.start = 0;
++
+ 	of_property_read_u32(np, "arm,sp804-has-irq", &irq_num);
+ 	if (irq_num == 2) {
+ 
+@@ -266,7 +291,7 @@ static int __init sp804_of_init(struct device_node *np)
+ 		if (ret)
+ 			goto err;
+ 
+-		ret = __sp804_clocksource_and_sched_clock_init(base, name, clk1, 1);
++		ret = __sp804_clocksource_and_sched_clock_init(base, res.start, name, clk1, 1);
+ 		if (ret)
+ 			goto err;
+ 	} else {
+@@ -276,7 +301,7 @@ static int __init sp804_of_init(struct device_node *np)
+ 			goto err;
+ 
+ 		ret =__sp804_clocksource_and_sched_clock_init(base + TIMER_2_BASE,
+-							      name, clk2, 1);
++							      res.start, name, clk2, 1);
+ 		if (ret)
+ 			goto err;
+ 	}
+@@ -296,6 +321,7 @@ static int __init integrator_cp_of_init(struct device_node *np)
+ 	int irq, ret = -EINVAL;
+ 	const char *name = of_get_property(np, "compatible", NULL);
+ 	struct clk *clk;
++	struct resource res;
+ 
+ 	base = of_iomap(np, 0);
+ 	if (!base) {
+@@ -315,8 +341,11 @@ static int __init integrator_cp_of_init(struct device_node *np)
+ 	if (init_count == 2 || !of_device_is_available(np))
+ 		goto err;
+ 
++	if (of_address_to_resource(np, 0, &res))
++	    res.start = 0;
++
+ 	if (!init_count) {
+-		ret = __sp804_clocksource_and_sched_clock_init(base, name, clk, 0);
++		ret = __sp804_clocksource_and_sched_clock_init(base, res.start, name, clk, 0);
+ 		if (ret)
+ 			goto err;
+ 	} else {
+diff --git a/include/clocksource/timer-sp804.h b/include/clocksource/timer-sp804.h
+index a5b41f3..461da5c 100644
+--- a/include/clocksource/timer-sp804.h
++++ b/include/clocksource/timer-sp804.h
+@@ -5,20 +5,23 @@
+ struct clk;
+ 
+ int __sp804_clocksource_and_sched_clock_init(void __iomem *,
++					     unsigned long phys,
+ 					     const char *, struct clk *, int);
+ int __sp804_clockevents_init(void __iomem *, unsigned int,
+ 			     struct clk *, const char *);
+ void sp804_timer_disable(void __iomem *);
+ 
+-static inline void sp804_clocksource_init(void __iomem *base, const char *name)
++static inline void sp804_clocksource_init(void __iomem *base, unsigned long phys,
++					  const char *name)
+ {
+-	__sp804_clocksource_and_sched_clock_init(base, name, NULL, 0);
++	__sp804_clocksource_and_sched_clock_init(base, phys, name, NULL, 0);
+ }
+ 
+ static inline void sp804_clocksource_and_sched_clock_init(void __iomem *base,
++							  unsigned long phys,
+ 							  const char *name)
+ {
+-	__sp804_clocksource_and_sched_clock_init(base, name, NULL, 1);
++	__sp804_clocksource_and_sched_clock_init(base, phys, name, NULL, 1);
+ }
+ 
+ static inline void sp804_clockevents_init(void __iomem *base, unsigned int irq, const char *name)
+-- 
+1.9.1
+

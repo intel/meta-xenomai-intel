@@ -1,0 +1,25 @@
+From 05e65ca84f61ff4c5845c6c5fc6178381c2366f6 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sat, 22 Sep 2018 15:53:21 +0200
+Subject: [PATCH 132/137] x86: ipipe: disable 32bit support
+
+---
+ arch/x86/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 5193cb4..f9a4654 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -145,7 +145,7 @@ config X86
+ 	select HAVE_IOREMAP_PROT
+ 	select HAVE_IRQ_EXIT_ON_IRQ_STACK	if X86_64
+ 	select HAVE_IRQ_TIME_ACCOUNTING
+-	select HAVE_IPIPE_SUPPORT
++	select HAVE_IPIPE_SUPPORT		if X86_64
+ 	select HAVE_IPIPE_TRACER_SUPPORT
+ 	select IPIPE_HAVE_SAFE_THREAD_INFO if IPIPE
+ 	select IPIPE_WANT_PTE_PINNING if IPIPE
+-- 
+1.9.1
+

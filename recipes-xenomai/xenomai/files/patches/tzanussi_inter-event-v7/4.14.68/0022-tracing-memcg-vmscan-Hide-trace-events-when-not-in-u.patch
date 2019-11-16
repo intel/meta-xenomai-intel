@@ -1,0 +1,63 @@
+From 5498186fa91f85a02594631c199b43b6f7265aa6 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Thu, 12 Oct 2017 18:46:32 -0400
+Subject: [PATCH 22/66] tracing, memcg, vmscan: Hide trace events when not in
+ use
+
+When trace events are defined but not used they still create data
+structures and functions for their use, even though nothing may be
+using them.
+
+The trace events mm_vmscan_memcg_reclaim_begin,
+mm_vmscan_memcg_softlimit_reclaim_begin, mm_vmscan_memcg_reclaim_end,
+and mm_vmscan_memcg_softlimit_reclaim_end are not used if CONFIG_MEMCG
+is not defined. Do not create these trace events unless CONFIG_MEMCG is
+defined.
+
+Link: http://lkml.kernel.org/r/20171012184632.2bd247cd@gandalf.local.home
+
+Acked-by: Michal Hocko <mhocko@suse.com>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/trace/events/vmscan.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/include/trace/events/vmscan.h b/include/trace/events/vmscan.h
+index dc23cf0..d70b53e 100644
+--- a/include/trace/events/vmscan.h
++++ b/include/trace/events/vmscan.h
+@@ -134,6 +134,7 @@
+ 	TP_ARGS(order, may_writepage, gfp_flags, classzone_idx)
+ );
+ 
++#ifdef CONFIG_MEMCG
+ DEFINE_EVENT(mm_vmscan_direct_reclaim_begin_template, mm_vmscan_memcg_reclaim_begin,
+ 
+ 	TP_PROTO(int order, int may_writepage, gfp_t gfp_flags, int classzone_idx),
+@@ -147,6 +148,7 @@
+ 
+ 	TP_ARGS(order, may_writepage, gfp_flags, classzone_idx)
+ );
++#endif /* CONFIG_MEMCG */
+ 
+ DECLARE_EVENT_CLASS(mm_vmscan_direct_reclaim_end_template,
+ 
+@@ -172,6 +174,7 @@
+ 	TP_ARGS(nr_reclaimed)
+ );
+ 
++#ifdef CONFIG_MEMCG
+ DEFINE_EVENT(mm_vmscan_direct_reclaim_end_template, mm_vmscan_memcg_reclaim_end,
+ 
+ 	TP_PROTO(unsigned long nr_reclaimed),
+@@ -185,6 +188,7 @@
+ 
+ 	TP_ARGS(nr_reclaimed)
+ );
++#endif /* CONFIG_MEMCG */
+ 
+ TRACE_EVENT(mm_shrink_slab_start,
+ 	TP_PROTO(struct shrinker *shr, struct shrink_control *sc,
+-- 
+1.9.1
+

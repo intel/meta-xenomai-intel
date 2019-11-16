@@ -1,0 +1,34 @@
+From 1fbbc89957b83b6c5ea06398c28dd0e347a0b06b Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 5 Jul 2018 08:53:25 +0200
+Subject: [PATCH 023/137] sched: ipipe: announce task exit
+
+Emit IPIPE_KEVT_EXIT from do_exit() to the co-kernel before the
+current task has dropped the files and mappings it owns.
+---
+ kernel/exit.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/kernel/exit.c b/kernel/exit.c
+index e3a0876..3ca20c9 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -56,6 +56,7 @@
+ #include <trace/events/sched.h>
+ #include <linux/hw_breakpoint.h>
+ #include <linux/oom.h>
++#include <linux/ipipe.h>
+ #include <linux/writeback.h>
+ #include <linux/shm.h>
+ #include <linux/kcov.h>
+@@ -820,6 +821,7 @@ void __noreturn do_exit(long code)
+ 	 */
+ 	raw_spin_lock_irq(&tsk->pi_lock);
+ 	raw_spin_unlock_irq(&tsk->pi_lock);
++  	__ipipe_report_exit(tsk);
+ 
+ 	if (unlikely(in_atomic())) {
+ 		pr_info("note: %s[%d] exited with preempt_count %d\n",
+-- 
+1.9.1
+

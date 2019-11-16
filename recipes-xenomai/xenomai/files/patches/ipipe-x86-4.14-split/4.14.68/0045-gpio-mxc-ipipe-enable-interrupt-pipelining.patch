@@ -1,0 +1,44 @@
+From 6caaefee4c7ca44023ff4753b0124258a686485c Mon Sep 17 00:00:00 2001
+From: Gilles Chanteperdrix <gilles.chanteperdrix@xenomai.org>
+Date: Sun, 3 Dec 2017 17:12:26 +0100
+Subject: [PATCH 045/137] gpio: mxc: ipipe: enable interrupt pipelining
+
+Fix up the MXC GPIO driver (i.MX series) in order to channel
+interrupts through the interrupt pipeline.
+---
+ drivers/gpio/gpio-mxc.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpio/gpio-mxc.c b/drivers/gpio/gpio-mxc.c
+index 5245a2f..285844e 100644
+--- a/drivers/gpio/gpio-mxc.c
++++ b/drivers/gpio/gpio-mxc.c
+@@ -35,6 +35,7 @@
+ #include <linux/of.h>
+ #include <linux/of_device.h>
+ #include <linux/bug.h>
++#include <linux/ipipe.h>
+ 
+ enum mxc_gpio_hwtype {
+ 	IMX1_GPIO,	/* runs on i.mx1 */
+@@ -267,7 +268,7 @@ static void mxc_gpio_irq_handler(struct mxc_gpio_port *port, u32 irq_stat)
+ 		if (port->both_edges & (1 << irqoffset))
+ 			mxc_flip_edge(port, irqoffset);
+ 
+-		generic_handle_irq(irq_find_mapping(port->domain, irqoffset));
++		ipipe_handle_demuxed_irq(irq_find_mapping(port->domain, irqoffset));
+ 
+ 		irq_stat &= ~(1 << irqoffset);
+ 	}
+@@ -360,7 +361,7 @@ static int mxc_gpio_init_gc(struct mxc_gpio_port *port, int irq_base)
+ 	ct->chip.irq_unmask = irq_gc_mask_set_bit;
+ 	ct->chip.irq_set_type = gpio_set_irq_type;
+ 	ct->chip.irq_set_wake = gpio_set_wake_irq;
+-	ct->chip.flags = IRQCHIP_MASK_ON_SUSPEND;
++	ct->chip.flags = IRQCHIP_MASK_ON_SUSPEND | IRQCHIP_PIPELINE_SAFE;
+ 	ct->regs.ack = GPIO_ISR;
+ 	ct->regs.mask = GPIO_IMR;
+ 
+-- 
+1.9.1
+

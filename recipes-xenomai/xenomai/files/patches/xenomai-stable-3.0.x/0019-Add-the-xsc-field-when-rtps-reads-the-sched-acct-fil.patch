@@ -1,0 +1,57 @@
+From 941f6dc65110e20b56fbdfd55fc0764bb944f41b Mon Sep 17 00:00:00 2001
+From: Christophe BLAESS <christophe.blaess@logilin.fr>
+Date: Mon, 29 Oct 2018 06:22:38 +0000
+Subject: [PATCH 19/21] Add the xsc field when rtps reads the sched/acct file.
+
+The rtps tools reads the /proc/xenomai/sched/acct file but didn't
+take the xsc field in account and failed to display some Xenomai
+threads. This patch adds the missing field when rtps reads a line.
+
+Signed-off-by: Christophe Blaess <christophe.blaess@logilin.fr>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ utils/ps/rtps.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/utils/ps/rtps.c b/utils/ps/rtps.c
+index bf5400e..6a07f11 100644
+--- a/utils/ps/rtps.c
++++ b/utils/ps/rtps.c
+@@ -25,15 +25,15 @@
+ #define PROC_ACCT  "/proc/xenomai/sched/acct"
+ #define PROC_PID  "/proc/%d/cmdline"
+ 
+-#define ACCT_FMT_1  "%u %d %lu %lu %lu %lx %Lu %Lu %Lu"
++#define ACCT_FMT_1  "%u %d %lu %lu %lu %lu %lx %Lu %Lu %Lu"
+ #define ACCT_FMT_2  ACCT_FMT_1 " %[^\n]"
+-#define ACCT_NFMT_1 9
+-#define ACCT_NFMT_2 10
++#define ACCT_NFMT_1 10
++#define ACCT_NFMT_2 11
+ 
+ int main(int argc, char *argv[])
+ {
+ 	char cmdpath[sizeof(PROC_PID) + 32], cmdbuf[BUFSIZ], acctbuf[BUFSIZ], name[64];
+-	unsigned long ssw, csw, pf, state, sec;
++	unsigned long ssw, csw, xsc, pf, state, sec;
+ 	unsigned long long account_period,
+ 		exectime_period, exectime_total, v;
+ 	unsigned int cpu, hr, min, msec, usec;
+@@ -49,12 +49,12 @@ int main(int argc, char *argv[])
+ 
+ 	while (fgets(acctbuf, sizeof(acctbuf), acctfp) != NULL) {
+ 		if (sscanf(acctbuf, ACCT_FMT_2,
+-		      &cpu, &pid, &ssw, &csw, &pf, &state,
++		      &cpu, &pid, &ssw, &csw, &xsc, &pf, &state,
+ 		      &account_period, &exectime_period,
+ 		      &exectime_total, name) != ACCT_NFMT_2) {
+ 			strcpy(name, "");
+ 			if (sscanf(acctbuf, ACCT_FMT_1,
+-			      &cpu, &pid, &ssw, &csw, &pf, &state,
++			      &cpu, &pid, &ssw, &csw, &xsc, &pf, &state,
+ 			     &account_period, &exectime_period,
+ 			     &exectime_total) != ACCT_NFMT_1) {
+ 				break;
+-- 
+1.9.1
+

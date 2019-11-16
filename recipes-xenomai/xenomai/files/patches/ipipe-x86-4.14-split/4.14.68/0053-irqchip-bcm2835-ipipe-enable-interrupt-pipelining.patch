@@ -1,0 +1,49 @@
+From f22fa1fcaeb28ec349638ba7dc2fe6420733395b Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 17:25:05 +0100
+Subject: [PATCH 053/137] irqchip: bcm2835: ipipe: enable interrupt pipelining
+
+Fix up the interrupt controller driver of the Broadcom 2835 SoC in
+order to channel interrupts through the interrupt pipeline.
+---
+ drivers/irqchip/irq-bcm2835.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/irqchip/irq-bcm2835.c b/drivers/irqchip/irq-bcm2835.c
+index d2da8a1..bf8c9d4 100644
+--- a/drivers/irqchip/irq-bcm2835.c
++++ b/drivers/irqchip/irq-bcm2835.c
+@@ -110,7 +110,11 @@ static void armctrl_unmask_irq(struct irq_data *d)
+ static struct irq_chip armctrl_chip = {
+ 	.name = "ARMCTRL-level",
+ 	.irq_mask = armctrl_mask_irq,
+-	.irq_unmask = armctrl_unmask_irq
++	.irq_unmask = armctrl_unmask_irq,
++#ifdef CONFIG_IPIPE
++	.irq_hold = armctrl_mask_irq,
++	.irq_release = armctrl_unmask_irq,
++#endif
+ };
+ 
+ static int armctrl_xlate(struct irq_domain *d, struct device_node *ctrlr,
+@@ -240,7 +244,7 @@ static void __exception_irq_entry bcm2835_handle_irq(
+ 	u32 hwirq;
+ 
+ 	while ((hwirq = get_next_armctrl_hwirq()) != ~0)
+-		handle_domain_irq(intc.domain, hwirq, regs);
++		ipipe_handle_domain_irq(intc.domain, hwirq, regs);
+ }
+ 
+ static void bcm2836_chained_handle_irq(struct irq_desc *desc)
+@@ -248,7 +252,7 @@ static void bcm2836_chained_handle_irq(struct irq_desc *desc)
+ 	u32 hwirq;
+ 
+ 	while ((hwirq = get_next_armctrl_hwirq()) != ~0)
+-		generic_handle_irq(irq_linear_revmap(intc.domain, hwirq));
++		ipipe_handle_demuxed_irq(irq_linear_revmap(intc.domain, hwirq));
+ }
+ 
+ IRQCHIP_DECLARE(bcm2835_armctrl_ic, "brcm,bcm2835-armctrl-ic",
+-- 
+1.9.1
+

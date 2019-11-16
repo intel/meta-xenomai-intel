@@ -1,0 +1,102 @@
+From 0f32f6f3c15041b6c54504c0eb0d2b0416847a11 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 9 Nov 2017 12:24:04 +0100
+Subject: [PATCH 015/137] dump_stack: ipipe: make dump_stack() domain-aware
+
+When dumping a stack backtrace, we neither need nor want to disable
+root stage IRQs over the head stage, where CPU migration can't
+happen.
+
+Conversely, we neither need nor want to disable hard IRQs from the
+head stage, so that latency won't skyrocket either.
+---
+ kernel/printk/printk.c |  3 +++
+ lib/dump_stack.c       | 30 +++++++++++++++++++++++++++---
+ 2 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/kernel/printk/printk.c b/kernel/printk/printk.c
+index ac3b7fb..63fab2b4 100644
+--- a/kernel/printk/printk.c
++++ b/kernel/printk/printk.c
+@@ -3245,6 +3245,9 @@ void dump_stack_print_info(const char *log_lvl)
+ 		printk("%sHardware name: %s\n",
+ 		       log_lvl, dump_stack_arch_desc_str);
+ 
++#ifdef CONFIG_IPIPE
++	printk("I-pipe domain: %s\n", ipipe_current_domain->name);
++#endif
+ 	print_worker_info(log_lvl, current);
+ }
+ 
+diff --git a/lib/dump_stack.c b/lib/dump_stack.c
+index c5edbed..898178d 100644
+--- a/lib/dump_stack.c
++++ b/lib/dump_stack.c
+@@ -10,6 +10,7 @@
+ #include <linux/sched/debug.h>
+ #include <linux/smp.h>
+ #include <linux/atomic.h>
++#include <linux/ipipe.h>
+ 
+ static void __dump_stack(void)
+ {
+@@ -25,6 +26,29 @@ static void __dump_stack(void)
+ #ifdef CONFIG_SMP
+ static atomic_t dump_lock = ATOMIC_INIT(-1);
+ 
++static unsigned long disable_local_irqs(void)
++{
++	unsigned long flags = 0; /* only to trick the UMR detection */
++
++	/*
++	 * We neither need nor want to disable root stage IRQs over
++	 * the head stage, where CPU migration can't
++	 * happen. Conversely, we neither need nor want to disable
++	 * hard IRQs from the head stage, so that latency won't
++	 * skyrocket as a result of dumping the stack backtrace.
++	 */
++	if (ipipe_root_p)
++		local_irq_save(flags);
++
++	return flags;
++}
++
++static void restore_local_irqs(unsigned long flags)
++{
++	if (ipipe_root_p)
++		local_irq_restore(flags);
++}
++
+ asmlinkage __visible void dump_stack(void)
+ {
+ 	unsigned long flags;
+@@ -37,7 +61,7 @@ asmlinkage __visible void dump_stack(void)
+ 	 * against other CPUs
+ 	 */
+ retry:
+-	local_irq_save(flags);
++	flags = disable_local_irqs();
+ 	cpu = smp_processor_id();
+ 	old = atomic_cmpxchg(&dump_lock, -1, cpu);
+ 	if (old == -1) {
+@@ -45,7 +69,7 @@ asmlinkage __visible void dump_stack(void)
+ 	} else if (old == cpu) {
+ 		was_locked = 1;
+ 	} else {
+-		local_irq_restore(flags);
++		restore_local_irqs(flags);
+ 		cpu_relax();
+ 		goto retry;
+ 	}
+@@ -55,7 +79,7 @@ asmlinkage __visible void dump_stack(void)
+ 	if (!was_locked)
+ 		atomic_set(&dump_lock, -1);
+ 
+-	local_irq_restore(flags);
++	restore_local_irqs(flags);
+ }
+ #else
+ asmlinkage __visible void dump_stack(void)
+-- 
+1.9.1
+

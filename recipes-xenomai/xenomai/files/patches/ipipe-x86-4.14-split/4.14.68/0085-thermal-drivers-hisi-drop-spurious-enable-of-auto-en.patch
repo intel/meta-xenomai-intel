@@ -1,0 +1,83 @@
+From a518f70c732dead8478cff1ff3b0d8abd4741752 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Mon, 20 Aug 2018 12:29:56 +0200
+Subject: [PATCH 085/137] thermal/drivers/hisi: drop spurious enable of
+ auto-enable irq
+
+Fixes the kernel warning below due to the second enable sneaking in
+between a thermal IRQ is handled by the hard interrupt handler - which
+disables it - and the IRQ thread eventually attempts to re-enable the
+interrupt - which was already enabled.
+
+[    0.405830] Unbalanced enable for IRQ 44
+[    0.406029] ------------[ cut here ]------------
+[    0.406035] WARNING: CPU: 3 PID: 1285 at kernel/irq/manage.c:525 __enable_irq+0x60/0x70
+[    0.406044] Modules linked in:
+[    0.406055] CPU: 3 PID: 1285 Comm: irq/44-hisi_the Not tainted 4.14.62-ipipe #2
+[    0.406060] Hardware name: HiKey Development Board (DT)
+[    0.406065] I-pipe domain: Linux
+[    0.406073] task: ffff8000336b0000 task.stack: ffff00000b9e0000
+[    0.406078] PC is at __enable_irq+0x60/0x70
+[    0.406083] LR is at __enable_irq+0x60/0x70
+[    0.406088] pc : [<ffff000008124d58>] lr : [<ffff000008124d58>] pstate: 60000045
+[    0.406093] sp : ffff00000b9e3c60
+[    0.406098] x29: ffff00000b9e3c60 x28: 0000000000000000
+[    0.406108] x27: ffff00000805ba40 x26: ffff8000336b0000
+[    0.406118] x25: ffff000008124000 x24: ffff00000b9e3d7c
+[    0.406128] x23: 0000000000000002 x22: ffff800033f39e88
+[    0.406138] x21: 000000000000bc40 x20: 000000000000002c
+[    0.406147] x19: ffff800034275200 x18: 0000000000000010
+[    0.406157] x17: 0000000000000007 x16: 0000000000000001
+[    0.406166] x15: ffff0000890014c7 x14: 0000000000000006
+[    0.406175] x13: ffff0000090014d5 x12: ffff000008eb34d0
+[    0.406184] x11: ffff000008eb3000 x10: 0000000005f5e0ff
+[    0.406193] x9 : ffff00000b9e3970 x8 : 0000000000000040
+[    0.406202] x7 : ffff000008e7c000 x6 : 0000000000000040
+[    0.406211] x5 : 0000000000000000 x4 : 0000000000000000
+[    0.406220] x3 : ffffffffffffffff x2 : ffff000008eb34f0
+[    0.406229] x1 : ffff8000336b0000 x0 : 000000000000001c
+[    0.406239] Call trace:
+[    0.406244] Exception stack(0xffff00000b9e3b20 to 0xffff00000b9e3c60)
+[    0.406249] 3b20: 000000000000001c ffff8000336b0000 ffff000008eb34f0 ffffffffffffffff
+[    0.406255] 3b40: 0000000000000000 0000000000000000 0000000000000040 ffff000008e7c000
+[    0.406261] 3b60: 0000000000000040 ffff00000b9e3970 0000000005f5e0ff ffff000008eb3000
+[    0.406267] 3b80: ffff000008eb34d0 ffff0000090014d5 0000000000000006 ffff0000890014c7
+[    0.406272] 3ba0: 0000000000000001 0000000000000007 0000000000000010 ffff800034275200
+[    0.406278] 3bc0: 000000000000002c 000000000000bc40 ffff800033f39e88 0000000000000002
+[    0.406284] 3be0: ffff00000b9e3d7c ffff000008124000 ffff8000336b0000 ffff00000805ba40
+[    0.406289] 3c00: 0000000000000000 ffff00000b9e3c60 ffff000008124d58 ffff00000b9e3c60
+[    0.406295] 3c20: ffff000008124d58 0000000060000045 0000000000000000 ffff800034275200
+[    0.406300] 3c40: ffffffffffffffff ffff000008e7c2b0 ffff00000b9e3c60 ffff000008124d58
+[    0.406306] [<ffff000008124d58>] __enable_irq+0x60/0x70
+[    0.406311] [<ffff000008124d9c>] enable_irq+0x34/0x68
+[    0.406317] [<ffff000008780320>] hisi_thermal_get_temp+0x160/0x198
+[    0.406322] [<ffff00000877b868>] of_thermal_get_temp+0x20/0x30
+[    0.406327] [<ffff00000877b0d4>] thermal_zone_get_temp+0x5c/0x138
+[    0.406332] [<ffff000008778740>] thermal_zone_device_update.part.4+0x20/0xb0
+[    0.406337] [<ffff0000087787f8>] thermal_zone_device_update+0x28/0x38
+[    0.406342] [<ffff00000877fe7c>] hisi_thermal_alarm_irq_thread+0x64/0x80
+[    0.406347] [<ffff0000081244e0>] irq_thread_fn+0x28/0x68
+[    0.406352] [<ffff000008124784>] irq_thread+0x114/0x1b0
+[    0.406357] [<ffff0000080f0384>] kthread+0xfc/0x128
+[    0.406362] [<ffff000008085274>] ret_from_fork+0x14/0x20
+[    0.406366] ---[ end trace 0e6011135c69587a ]---
+---
+ drivers/thermal/hisi_thermal.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/drivers/thermal/hisi_thermal.c b/drivers/thermal/hisi_thermal.c
+index 6d8906d..433d988 100644
+--- a/drivers/thermal/hisi_thermal.c
++++ b/drivers/thermal/hisi_thermal.c
+@@ -378,8 +378,6 @@ static int hisi_thermal_probe(struct platform_device *pdev)
+ 		return ret;
+ 	}
+ 
+-	enable_irq(data->irq);
+-
+ 	return 0;
+ }
+ 
+-- 
+1.9.1
+

@@ -1,0 +1,32 @@
+From 31d920da63806f3e36526db877dfec0bd87247b8 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Mon, 10 Sep 2018 10:40:43 +0200
+Subject: [PATCH 125/137] x86/irq: ipipe: reconcile lockdep tracing with
+ virtual IRQ state
+
+---
+ arch/x86/entry/entry_64.S | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/entry/entry_64.S b/arch/x86/entry/entry_64.S
+index c304b11..f6fe849 100644
+--- a/arch/x86/entry/entry_64.S
++++ b/arch/x86/entry/entry_64.S
+@@ -557,8 +557,13 @@ END(irq_entries_start)
+ 
+ 1:
+ 	ENTER_IRQ_STACK old_rsp=%rdi
+-	/* We entered an interrupt context - irqs are off: */
++#ifndef CONFIG_IPIPE
++	/* We entered an interrupt context - irqs are off unless
++	   pipelining is enabled, in which case we defer tracing until
++	   __ipipe_do_sync_stage() where the virtual IRQ state is
++	   updated for the root stage. */
+ 	TRACE_IRQS_OFF
++#endif
+ 
+ 	call	\func	/* rdi points to pt_regs */
+ 	.endm
+-- 
+1.9.1
+

@@ -1,0 +1,29 @@
+From 9682834f1cb2e2ce0913153172843476ea3d5fa7 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 11:56:22 +0100
+Subject: [PATCH 029/137] gpio: ipipe: convert to hard locking
+
+The generic GPIO chip needs to be hard locked as its handlers may be
+called from out-of-band code running in the head domain. To this end,
+convert the regular spinlock protecting the gpio_chip descriptor to a
+hard lock.
+---
+ include/linux/gpio/driver.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/linux/gpio/driver.h b/include/linux/gpio/driver.h
+index 424e513..028ba4a 100644
+--- a/include/linux/gpio/driver.h
++++ b/include/linux/gpio/driver.h
+@@ -154,7 +154,7 @@ struct gpio_chip {
+ 	void __iomem *reg_clr;
+ 	void __iomem *reg_dir;
+ 	int bgpio_bits;
+-	spinlock_t bgpio_lock;
++	ipipe_spinlock_t bgpio_lock;
+ 	unsigned long bgpio_data;
+ 	unsigned long bgpio_dir;
+ #endif
+-- 
+1.9.1
+

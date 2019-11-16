@@ -1,0 +1,37 @@
+From 2e763d1184cd8d1c771e5ee57203a27bb6aee194 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 15:29:29 +0100
+Subject: [PATCH 117/137] x86/nmi: ipipe: disallow user copy from head domain
+
+Copying user memory from NMI context is deemed unsafe when the
+interrupt has preempted the head domain.
+
+Revisit: why?
+---
+ arch/x86/lib/usercopy.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/lib/usercopy.c b/arch/x86/lib/usercopy.c
+index 3f435d7..1168c90 100644
+--- a/arch/x86/lib/usercopy.c
++++ b/arch/x86/lib/usercopy.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include <linux/uaccess.h>
++#include <linux/ipipe.h>
+ #include <linux/export.h>
+ 
+ #include <asm/tlbflush.h>
+@@ -18,7 +19,7 @@
+ {
+ 	unsigned long ret;
+ 
+-	if (__range_not_ok(from, n, TASK_SIZE))
++	if (!ipipe_root_p || __range_not_ok(from, n, TASK_SIZE))
+ 		return n;
+ 
+ 	if (!nmi_uaccess_okay())
+-- 
+1.9.1
+

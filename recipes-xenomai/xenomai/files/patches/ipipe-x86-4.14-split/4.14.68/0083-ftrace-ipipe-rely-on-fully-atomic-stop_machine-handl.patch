@@ -1,0 +1,35 @@
+From 63e3956ac2e7e8af098d4005168e6ceab43077bf Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 21 Aug 2018 14:45:26 +0200
+Subject: [PATCH 083/137] ftrace: ipipe: rely on fully atomic stop_machine()
+ handler
+
+Now that stop_machine() guarantees fully atomic execution of the stop
+routine via hard interrupt disabling, there is no point in using
+ipipe_critical_enter/exit() for the same purpose in order to patch the
+kernel text.
+---
+ kernel/trace/ftrace.c | 6 ------
+ 1 file changed, 6 deletions(-)
+
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index fbacf38..28bf139 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -2687,13 +2687,7 @@ static void ftrace_run_update_code(int command)
+ 	 * is safe. The stop_machine() is the safest, but also
+ 	 * produces the most overhead.
+ 	 */
+-#ifdef CONFIG_IPIPE
+-	flags = ipipe_critical_enter(NULL);
+-	__ftrace_modify_code(&command);
+-	ipipe_critical_exit(flags);
+-#else  /* !CONFIG_IPIPE */
+ 	arch_ftrace_update_code(command);
+-#endif /* !CONFIG_IPIPE */
+ 
+ 	ret = ftrace_arch_code_modify_post_process();
+ 	FTRACE_WARN_ON(ret);
+-- 
+1.9.1
+

@@ -1,0 +1,47 @@
+From 2a2f6420c95656254ad17ed32e248140511796bb Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:47:21 +0200
+Subject: [PATCH 018/137] timekeeping: ipipe: forward clock shift value to DSO
+ helpers
+
+In order to propagate the "host real-time update" event to a co-kernek
+(IPIPE_KEVT_HOSTRT), we need the clock shift value of the monotonic
+clock to be passed to the legacy vDSO handler, for (re)calculating the
+new wall clock time which is eventually announced to the co-kernel.
+
+Only architectures which still implement the legacy
+update_vsyscall_old() interface need this change.
+---
+ include/linux/timekeeper_internal.h | 2 +-
+ kernel/time/timekeeping.c           | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/timekeeper_internal.h b/include/linux/timekeeper_internal.h
+index 97154c6..ff8d7c7 100644
+--- a/include/linux/timekeeper_internal.h
++++ b/include/linux/timekeeper_internal.h
+@@ -135,7 +135,7 @@ struct timekeeper {
+ #elif defined(CONFIG_GENERIC_TIME_VSYSCALL_OLD)
+ 
+ extern void update_vsyscall_old(struct timespec *ts, struct timespec *wtm,
+-				struct clocksource *c, u32 mult,
++				struct clocksource *c, u32 mult, u32 shift,
+ 				u64 cycle_last);
+ extern void update_vsyscall_tz(void);
+ 
+diff --git a/kernel/time/timekeeping.c b/kernel/time/timekeeping.c
+index 2cafb49..002c939 100644
+--- a/kernel/time/timekeeping.c
++++ b/kernel/time/timekeeping.c
+@@ -525,7 +525,7 @@ static inline void update_vsyscall(struct timekeeper *tk)
+ 	xt = timespec64_to_timespec(tk_xtime(tk));
+ 	wm = timespec64_to_timespec(tk->wall_to_monotonic);
+ 	update_vsyscall_old(&xt, &wm, tk->tkr_mono.clock, tk->tkr_mono.mult,
+-			    tk->tkr_mono.cycle_last);
++			    tk->tkr_mono.shift, tk->tkr_mono.cycle_last);
+ }
+ 
+ static inline void old_vsyscall_fixup(struct timekeeper *tk)
+-- 
+1.9.1
+

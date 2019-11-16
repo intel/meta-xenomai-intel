@@ -1,0 +1,29 @@
+From 3f0d8be6dfad7f43ba7e9cba2948bdac0f70d919 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 28 Sep 2018 16:26:36 +0200
+Subject: [PATCH 135/137] sched/core: ipipe: do not panic on failed migration
+ to the head stage
+
+__ipipe_migrate_head() should not BUG() unconditionally when failing
+to schedule out a thread, but rather let the real-time core handle the
+situation a bit more gracefully.
+---
+ kernel/sched/core.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 4da6529..79d204b 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -5813,8 +5813,6 @@ int __ipipe_migrate_head(void)
+ 	if (likely(__schedule(false)))
+ 		return 0;
+ 
+-	BUG_ON(!signal_pending(p));
+-
+ 	preempt_enable();
+ 	return -ERESTARTSYS;
+ }
+-- 
+1.9.1
+

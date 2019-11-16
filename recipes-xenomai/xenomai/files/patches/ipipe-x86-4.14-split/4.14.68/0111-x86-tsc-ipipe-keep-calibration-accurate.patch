@@ -1,0 +1,74 @@
+From d89fe504243e884eaabc4b38b54bbba48f331941 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 13:24:29 +0100
+Subject: [PATCH 111/137] x86/tsc: ipipe: keep calibration accurate
+
+Hard disable interrupts to keep the calibration accurate.
+---
+ arch/x86/include/asm/tsc.h |  1 +
+ arch/x86/kernel/tsc.c      | 12 ++++++------
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/include/asm/tsc.h b/arch/x86/include/asm/tsc.h
+index a62413d..b8a803e 100644
+--- a/arch/x86/include/asm/tsc.h
++++ b/arch/x86/include/asm/tsc.h
+@@ -15,6 +15,7 @@
+  */
+ typedef unsigned long long cycles_t;
+ 
++extern struct clocksource clocksource_tsc;
+ extern unsigned int cpu_khz;
+ extern unsigned int tsc_khz;
+ 
+diff --git a/arch/x86/kernel/tsc.c b/arch/x86/kernel/tsc.c
+index ecebc3c..27c188b 100644
+--- a/arch/x86/kernel/tsc.c
++++ b/arch/x86/kernel/tsc.c
+@@ -687,9 +687,9 @@ unsigned long native_calibrate_cpu(void)
+ 	if (fast_calibrate)
+ 		return fast_calibrate;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	fast_calibrate = quick_pit_calibrate();
+-	local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ 	if (fast_calibrate)
+ 		return fast_calibrate;
+ 
+@@ -732,11 +732,11 @@ unsigned long native_calibrate_cpu(void)
+ 		 * calibration, which will take at least 50ms, and
+ 		 * read the end value.
+ 		 */
+-		local_irq_save(flags);
++		flags = hard_local_irq_save();
+ 		tsc1 = tsc_read_refs(&ref1, hpet);
+ 		tsc_pit_khz = pit_calibrate_tsc(latch, ms, loopmin);
+ 		tsc2 = tsc_read_refs(&ref2, hpet);
+-		local_irq_restore(flags);
++		hard_local_irq_restore(flags);
+ 
+ 		/* Pick the lowest PIT TSC calibration so far */
+ 		tsc_pit_min = min(tsc_pit_min, tsc_pit_khz);
+@@ -1010,7 +1010,7 @@ static void detect_art(void)
+ 
+ /* clocksource code */
+ 
+-static struct clocksource clocksource_tsc;
++struct clocksource clocksource_tsc;
+ 
+ static void tsc_resume(struct clocksource *cs)
+ {
+@@ -1062,7 +1062,7 @@ static void tsc_cs_tick_stable(struct clocksource *cs)
+ /*
+  * .mask MUST be CLOCKSOURCE_MASK(64). See comment above read_tsc()
+  */
+-static struct clocksource clocksource_tsc = {
++struct clocksource clocksource_tsc = {
+ 	.name                   = "tsc",
+ 	.rating                 = 300,
+ 	.read                   = read_tsc,
+-- 
+1.9.1
+

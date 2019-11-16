@@ -1,0 +1,276 @@
+From b768f27265a9d701576a23608940914b37e096ef Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 24 Aug 2018 10:37:35 +0200
+Subject: [PATCH 089/137] PM: ipipe: converge to Dovetail's CPUIDLE management
+
+Handle requests for transitioning to deeper C-states the way Dovetail
+does, which prevents us from losing the timer when grabbed by a
+co-kernel, in presence of a CPUIDLE driver.
+---
+ Documentation/ipipe.rst   |  5 +++++
+ drivers/cpuidle/cpuidle.c | 13 ++++++++-----
+ include/linux/ipipe.h     | 11 -----------
+ include/linux/irqflags.h  |  7 +------
+ kernel/ipipe/core.c       | 47 ++++++++++++++++++++++-------------------------
+ kernel/sched/idle.c       | 26 +++++++++++++++++++++-----
+ 6 files changed, 57 insertions(+), 52 deletions(-)
+
+diff --git a/Documentation/ipipe.rst b/Documentation/ipipe.rst
+index ba95b66..60dd73f 100644
+--- a/Documentation/ipipe.rst
++++ b/Documentation/ipipe.rst
+@@ -751,6 +751,11 @@ The following kernel areas are involved in interrupt pipelining:
+     If this hook returns a boolean *true* value, CPUIDLE proceeds as
+     normally. Otherwise, the CPU is simply denied from entering the
+     idle state, leaving the timer hardware enabled.
++
++    ..CAUTION:: If some out-of-band code waiting for an external event
++    cannot bear with the latency that might be induced by the default
++    architecture-specific CPU idling code, then CPUIDLE is not usable
++    and should be disabled at build time.
+     
+   * Kernel preemption control (PREEMPT)
+ 
+diff --git a/drivers/cpuidle/cpuidle.c b/drivers/cpuidle/cpuidle.c
+index 025d5e5..0c238f1 100644
+--- a/drivers/cpuidle/cpuidle.c
++++ b/drivers/cpuidle/cpuidle.c
+@@ -198,13 +198,17 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
+ 
+ 	/*
+ 	 * A co-kernel running on the head stage of the IRQ pipeline
+-	 * may deny this switch.
++	 * may deny switching to a deeper C-state. If so, call the
++	 * default idle routine instead. If the co-kernel cannot bear
++	 * with the latency induced by the default idling operation,
++	 * then CPUIDLE is not usable and should be disabled at build
++	 * time.
+ 	 */
+ 	if (!ipipe_enter_cpuidle(dev, target_state)) {
+-		ipipe_exit_cpuidle();
++		default_idle_call();
+ 		return -EBUSY;
+ 	}
+-		
++
+ 	/*
+ 	 * Tell the time framework to switch to a broadcast timer because our
+ 	 * local timer will be shut down.  If a local timer is used from another
+@@ -229,6 +233,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
+ 
+ 	stop_critical_timings();
+ 	entered_state = target_state->enter(dev, drv, index);
++	hard_cond_local_irq_enable();
+ 	start_critical_timings();
+ 
+ 	sched_clock_idle_wakeup_event();
+@@ -265,8 +270,6 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
+ 		dev->last_residency = 0;
+ 	}
+ 
+-	ipipe_exit_cpuidle();
+-
+ 	return entered_state;
+ }
+ 
+diff --git a/include/linux/ipipe.h b/include/linux/ipipe.h
+index 64cab2d..692f59c 100644
+--- a/include/linux/ipipe.h
++++ b/include/linux/ipipe.h
+@@ -429,13 +429,9 @@ int ipipe_test_ti_thread_flag(struct thread_info *ti, int flag)
+ 	} while (0)
+ #endif /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
+ 
+-bool __ipipe_enter_cpuidle(void);
+-
+ bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
+ 			 struct cpuidle_state *state);
+ 
+-void ipipe_exit_cpuidle(void);
+-
+ #else	/* !CONFIG_IPIPE */
+ 
+ #define __ipipe_root_p		1
+@@ -470,11 +466,6 @@ int ipipe_handle_syscall(struct thread_info *ti,
+ 	return 0;
+ }
+ 
+-static inline bool __ipipe_enter_cpuidle(void)
+-{
+-	return true;
+-}
+-
+ static inline
+ bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
+ 			 struct cpuidle_state *state)
+@@ -482,8 +473,6 @@ bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
+ 	return true;
+ }
+ 
+-static inline void ipipe_exit_cpuidle(void) { }
+-
+ #endif	/* !CONFIG_IPIPE */
+ 
+ #endif	/* !__LINUX_IPIPE_H */
+diff --git a/include/linux/irqflags.h b/include/linux/irqflags.h
+index 1bd20fc..abff1bc 100644
+--- a/include/linux/irqflags.h
++++ b/include/linux/irqflags.h
+@@ -146,12 +146,7 @@
+ #endif /* CONFIG_TRACE_IRQFLAGS */
+ 
+ #ifdef CONFIG_IPIPE
+-#define local_irq_enable_full()			\
+-	do {					\
+-		hard_local_irq_enable();	\
+-		local_irq_enable();		\
+-	} while (0)
+-
++#define local_irq_enable_full()		local_irq_enable()
+ #define local_irq_disable_full()		\
+ 	do {					\
+ 		local_irq_disable();		\
+diff --git a/kernel/ipipe/core.c b/kernel/ipipe/core.c
+index 0a227a4..19817e1 100644
+--- a/kernel/ipipe/core.c
++++ b/kernel/ipipe/core.c
+@@ -30,6 +30,8 @@
+ #include <linux/tick.h>
+ #include <linux/interrupt.h>
+ #include <linux/uaccess.h>
++#include <linux/cpuidle.h>
++#include <linux/sched/idle.h>
+ #ifdef CONFIG_PROC_FS
+ #include <linux/proc_fs.h>
+ #include <linux/seq_file.h>
+@@ -1914,43 +1916,38 @@ bool __weak ipipe_cpuidle_control(struct cpuidle_device *dev,
+ 				  struct cpuidle_state *state)
+ {
+ 	/*
+-	 * Allow entering the idle state by default, matching the
+-	 * original behavior when CPU_IDLE is turned
+-	 * on. ipipe_cpuidle_control() should be overriden by the
+-	 * client domain code for determining whether the CPU may
+-	 * actually enter the idle state.
++	 * By default, always deny entering sleep state if this
++	 * entails stopping the timer (i.e. C3STOP misfeature),
++	 * Xenomai could not deal with this case.
+ 	 */
++	if (state && (state->flags & CPUIDLE_FLAG_TIMER_STOP))
++		return false;
++
++	/* Otherwise, allow switching to idle state. */
+ 	return true;
+ }
+ 
+-bool __ipipe_enter_cpuidle(void)
++bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
++			 struct cpuidle_state *state)
+ {
+ 	struct ipipe_percpu_domain_data *p;
+ 
+-	/*
+-	 * We may go idle if no interrupt is waiting delivery from the
+-	 * root stage.
+-	 */
++	WARN_ON_ONCE(hard_irqs_disabled());
++	WARN_ON_ONCE(!irqs_disabled());
++	
+ 	hard_local_irq_disable();
+ 	p = ipipe_this_cpu_root_context();
+ 
+-	return !__ipipe_ipending_p(p);
+-}
+-
+-bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
+-			 struct cpuidle_state *state)
+-{
+ 	/*
+-	 * Pending IRQs or a co-kernel may deny the transition to
+-	 * idle.
++	 * Pending IRQ(s) waiting for delivery to the root stage, or
++	 * the arbitrary decision of a co-kernel may deny the
++	 * transition to a deeper C-state. Note that we return from
++	 * this call with hard irqs off, so that we won't allow any
++	 * interrupt to sneak into the IRQ log until we reach the
++	 * processor idling code, or leave the CPU idle framework
++	 * without sleeping.
+ 	 */
+-	return __ipipe_enter_cpuidle() && ipipe_cpuidle_control(dev, state);
+-}
+-
+-void ipipe_exit_cpuidle(void)
+-{
+-	/* unstall and re-enable hw IRQs too. */
+-	local_irq_enable();
++	return !__ipipe_ipending_p(p) && ipipe_cpuidle_control(dev, state);
+ }
+ 
+ #if defined(CONFIG_DEBUG_ATOMIC_SLEEP) || defined(CONFIG_PROVE_LOCKING) || \
+diff --git a/kernel/sched/idle.c b/kernel/sched/idle.c
+index bb0a21d..cbc4348 100644
+--- a/kernel/sched/idle.c
++++ b/kernel/sched/idle.c
+@@ -81,22 +81,25 @@ void __weak arch_cpu_idle_dead(void) { }
+ void __weak arch_cpu_idle(void)
+ {
+ 	cpu_idle_force_poll = 1;
+-	local_irq_enable();
++	local_irq_enable_full();
+ }
+ 
+ /**
+  * default_idle_call - Default CPU idle routine.
+  *
+  * To use when the cpuidle framework cannot be used.
++ *
++ * When interrupts are pipelined, this call is entered with hard irqs
++ * on and the root stage stalled, returns with hard irqs on, and the
++ * root stage unstalled.
+  */
+ void __cpuidle default_idle_call(void)
+ {
+-	if (current_clr_polling_and_test() || !__ipipe_enter_cpuidle()) {
+-		local_irq_enable();
++	if (current_clr_polling_and_test()) {
++		local_irq_enable_full();
+ 	} else {
+ 		stop_critical_timings();
+ 		arch_cpu_idle();
+-		ipipe_exit_cpuidle();
+ 		start_critical_timings();
+ 	}
+ }
+@@ -194,6 +197,15 @@ static void cpuidle_idle_call(void)
+ exit_idle:
+ 	__current_set_polling();
+ 
++#ifdef CONFIG_IPIPE
++	/*
++	 *  Catch mishandling of the CPU's interrupt disable flag when
++	 *  pipelining IRQs.
++	 */
++	if (WARN_ON_ONCE(hard_irqs_disabled()))
++		hard_local_irq_enable();
++#endif
++
+ 	/*
+ 	 * It is up to the idle functions to reenable local interrupts
+ 	 */
+@@ -243,8 +255,12 @@ static void do_idle(void)
+ 		 */
+ 		if (cpu_idle_force_poll || tick_check_broadcast_expired())
+ 			cpu_idle_poll();
+-		else
++		else {
+ 			cpuidle_idle_call();
++#ifdef CONFIG_IPIPE
++			WARN_ON_ONCE(hard_irqs_disabled());
++#endif
++		}
+ 		arch_cpu_idle_exit();
+ 	}
+ 
+-- 
+1.9.1
+

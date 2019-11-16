@@ -1,0 +1,32 @@
+From dd3b02f5ab3046e0a3a02cdcd83be117aec399e5 Mon Sep 17 00:00:00 2001
+From: Henning Schild <henning.schild@siemens.com>
+Date: Fri, 14 Sep 2018 17:10:16 +0200
+Subject: [PATCH 07/21] cobalt/x86: add ipipe-4.4 eager fpu support
+
+Linux 4.4.138 switched to eager fpu, set IPIPE_X86_FPU_EAGER
+accordingly.
+
+Signed-off-by: Henning Schild <henning.schild@siemens.com>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h b/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
+index 00f0aaa..a477301 100644
+--- a/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
++++ b/kernel/cobalt/arch/x86/include/asm/xenomai/wrappers.h
+@@ -28,6 +28,10 @@
+     LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
+ #define IPIPE_X86_FPU_EAGER
+ #endif
++#if LINUX_VERSION_CODE > KERNEL_VERSION(4,4,137) && \
++    LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
++#define IPIPE_X86_FPU_EAGER
++#endif
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+ #include <asm/i387.h>
+-- 
+1.9.1
+

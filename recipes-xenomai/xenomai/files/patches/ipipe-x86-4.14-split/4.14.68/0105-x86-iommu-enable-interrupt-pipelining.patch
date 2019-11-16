@@ -1,0 +1,33 @@
+From d78f64ab762fb495a042e62f2dab7fb57ff052da Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 15:39:35 +0100
+Subject: [PATCH 105/137] x86/iommu: enable interrupt pipelining
+
+Fix up the IRQ remapping code from the IOMMU controller driver in
+order to actually ack the APIC upon incoming edge interrupts. A
+previous change made ack_APIC_irq() a null placeholder, since the
+original interrupt handlers calling it should not ack the APIC
+anymore, once pipelining is in place.
+
+We must revert this change in the acknowledge handler though, since
+the pipeline core needs it to issue such ack.
+---
+ drivers/iommu/irq_remapping.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/iommu/irq_remapping.c b/drivers/iommu/irq_remapping.c
+index 49721b4..d26506a 100644
+--- a/drivers/iommu/irq_remapping.c
++++ b/drivers/iommu/irq_remapping.c
+@@ -158,7 +158,7 @@ void panic_if_irq_remap(const char *msg)
+ 
+ void ir_ack_apic_edge(struct irq_data *data)
+ {
+-	ack_APIC_irq();
++	__ack_APIC_irq();
+ }
+ 
+ /**
+-- 
+1.9.1
+

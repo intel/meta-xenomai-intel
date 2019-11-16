@@ -1,0 +1,42 @@
+From cf7349c1c3dd09d4e8527e155a293a421d964204 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:13:58 +0200
+Subject: [PATCH 009/137] context_tracking: ipipe: do not track over the head
+ domain
+
+Context tracking is a prerequisite for FULL_NOHZ, so that the RCU
+subsystem can detect CPU idleness without relying on the (regular)
+timer tick.
+
+Out-of-band activity running over the head domain should by definition
+not be involved in such detection logic, as the root domain has no
+knowledge of what happens - and when - on the head domain whatsoever.
+---
+ kernel/context_tracking.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/context_tracking.c b/kernel/context_tracking.c
+index 9ad37b9..b123fad 100644
+--- a/kernel/context_tracking.c
++++ b/kernel/context_tracking.c
+@@ -113,7 +113,7 @@ void context_tracking_enter(enum ctx_state state)
+ 	 * helpers are enough to protect RCU uses inside the exception. So
+ 	 * just return immediately if we detect we are in an IRQ.
+ 	 */
+-	if (in_interrupt())
++	if (!ipipe_root_p || in_interrupt())
+ 		return;
+ 
+ 	local_irq_save(flags);
+@@ -169,7 +169,7 @@ void context_tracking_exit(enum ctx_state state)
+ {
+ 	unsigned long flags;
+ 
+-	if (in_interrupt())
++	if (!ipipe_root_p || in_interrupt())
+ 		return;
+ 
+ 	local_irq_save(flags);
+-- 
+1.9.1
+

@@ -1,0 +1,27 @@
+From e3db9522c33e8f7999edf8eb51ced328728a2b78 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 12 Jul 2018 17:14:40 +0200
+Subject: [PATCH 103/137] x86: context_tracking: disable if CONFIG_IPIPE
+
+Context tracking does not cope well with interrupt pipelining
+currently: disable the former for now.
+---
+ arch/x86/Kconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index bcd50ed..acaf363 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -123,7 +123,7 @@ config X86
+ 	select HAVE_CC_STACKPROTECTOR
+ 	select HAVE_CMPXCHG_DOUBLE
+ 	select HAVE_CMPXCHG_LOCAL
+-	select HAVE_CONTEXT_TRACKING		if X86_64
++	select HAVE_CONTEXT_TRACKING		if X86_64 && !IPIPE
+ 	select HAVE_COPY_THREAD_TLS
+ 	select HAVE_C_RECORDMCOUNT
+ 	select HAVE_DEBUG_KMEMLEAK
+-- 
+1.9.1
+

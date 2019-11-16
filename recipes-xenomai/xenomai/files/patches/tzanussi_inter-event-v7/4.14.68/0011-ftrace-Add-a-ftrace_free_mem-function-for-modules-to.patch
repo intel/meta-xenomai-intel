@@ -1,0 +1,68 @@
+From 6dc61110d3f6e0bac19caf678c8c2081aaf38193 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Tue, 20 Jun 2017 10:44:58 -0400
+Subject: [PATCH 11/66] ftrace: Add a ftrace_free_mem() function for modules to
+ use
+
+In order to be able to trace module init functions, the module code needs to
+tell ftrace what is being freed when the init sections are freed. Use the
+code that the main init calls to tell ftrace to free the main init sections.
+This requires passing in a start and end address to free.
+
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/linux/ftrace.h |  2 ++
+ kernel/trace/ftrace.c  | 14 +++++++++++---
+ 2 files changed, 13 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/ftrace.h b/include/linux/ftrace.h
+index e54d257..1ed4e40 100644
+--- a/include/linux/ftrace.h
++++ b/include/linux/ftrace.h
+@@ -152,8 +152,10 @@ struct ftrace_ops_hash {
+ };
+ 
+ void ftrace_free_init_mem(void);
++void ftrace_free_mem(void *start, void *end);
+ #else
+ static inline void ftrace_free_init_mem(void) { }
++static inline void ftrace_free_mem(void *start, void *end) { }
+ #endif
+ 
+ /*
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index 7379bcf..580348c 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -5864,10 +5864,10 @@ void ftrace_module_init(struct module *mod)
+ }
+ #endif /* CONFIG_MODULES */
+ 
+-void __init ftrace_free_init_mem(void)
++void ftrace_free_mem(void *start_ptr, void *end_ptr)
+ {
+-	unsigned long start = (unsigned long)(&__init_begin);
+-	unsigned long end = (unsigned long)(&__init_end);
++	unsigned long start = (unsigned long)(start_ptr);
++	unsigned long end = (unsigned long)(end_ptr);
+ 	struct ftrace_page **last_pg = &ftrace_pages_start;
+ 	struct ftrace_page *pg;
+ 	struct dyn_ftrace *rec;
+@@ -5909,6 +5909,14 @@ void __init ftrace_free_init_mem(void)
+ 	mutex_unlock(&ftrace_lock);
+ }
+ 
++void __init ftrace_free_init_mem(void)
++{
++	void *start = (void *)(&__init_begin);
++	void *end = (void *)(&__init_end);
++
++	ftrace_free_mem(start, end);
++}
++
+ void __init ftrace_init(void)
+ {
+ 	extern unsigned long __start_mcount_loc[];
+-- 
+1.9.1
+

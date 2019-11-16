@@ -1,0 +1,52 @@
+From 762d51d9e5c30900928af99843356e05bda1334e Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 20 Sep 2018 19:02:26 +0200
+Subject: [PATCH 127/137] x86/msi: ipipe: advertise pipelining support
+
+---
+ arch/x86/kernel/apic/msi.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/arch/x86/kernel/apic/msi.c b/arch/x86/kernel/apic/msi.c
+index 5a1006a..8ee66f4 100644
+--- a/arch/x86/kernel/apic/msi.c
++++ b/arch/x86/kernel/apic/msi.c
+@@ -68,7 +68,7 @@ static void irq_msi_compose_msg(struct irq_data *data, struct msi_msg *msg)
+ #if defined(CONFIG_IPIPE) && defined(CONFIG_SMP)
+ 	.irq_move		= move_xxapic_irq,
+ #endif
+-	.flags			= IRQCHIP_SKIP_SET_WAKE,
++	.flags			= IRQCHIP_SKIP_SET_WAKE | IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ int native_setup_msi_irqs(struct pci_dev *dev, int nvec, int type)
+@@ -169,7 +169,7 @@ void __init arch_init_msi_domain(struct irq_domain *parent)
+ #if defined(CONFIG_IPIPE) && defined(CONFIG_SMP)
+ 	.irq_move		= move_xxapic_irq,
+ #endif
+-	.flags			= IRQCHIP_SKIP_SET_WAKE,
++	.flags			= IRQCHIP_SKIP_SET_WAKE | IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ static struct msi_domain_info pci_msi_ir_domain_info = {
+@@ -214,7 +214,7 @@ static void dmar_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+ #if defined(CONFIG_IPIPE) && defined(CONFIG_SMP)
+ 	.irq_move		= move_xxapic_irq,
+ #endif
+-	.flags			= IRQCHIP_SKIP_SET_WAKE,
++	.flags			= IRQCHIP_SKIP_SET_WAKE | IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ static irq_hw_number_t dmar_msi_get_hwirq(struct msi_domain_info *info,
+@@ -314,7 +314,7 @@ static void hpet_msi_write_msg(struct irq_data *data, struct msi_msg *msg)
+ #if defined(CONFIG_IPIPE) && defined(CONFIG_SMP)
+ 	.irq_move = move_xxapic_irq,
+ #endif
+-	.flags = IRQCHIP_SKIP_SET_WAKE,
++	.flags = IRQCHIP_SKIP_SET_WAKE | IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ static irq_hw_number_t hpet_msi_get_hwirq(struct msi_domain_info *info,
+-- 
+1.9.1
+

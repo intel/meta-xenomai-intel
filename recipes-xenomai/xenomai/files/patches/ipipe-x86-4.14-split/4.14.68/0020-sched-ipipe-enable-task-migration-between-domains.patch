@@ -1,0 +1,611 @@
+From 2edf5bbc1a0ff6a57add01ffb3f7f5b43dccdc58 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 12:05:12 +0100
+Subject: [PATCH 020/137] sched: ipipe: enable task migration between domains
+
+This is the basic code enabling alternate control of tasks between the
+regular kernel and an embedded co-kernel. The changes cover the
+following aspects:
+
+- extend the per-thread information block with a private area usable
+  by the co-kernel for storing additional state information
+
+- provide the API enabling a scheduler exchange mechanism, so that
+  tasks can run under the control of either kernel alternatively. This
+  includes a service to move the current task to the head domain under
+  the control of the co-kernel, and the converse service to re-enter
+  the root domain once the co-kernel has released such task.
+
+- ensure the generic context switching code can be used from any
+  domain, serializing execution as required.
+
+These changes have to be paired with arch-specific code further
+enabling context switching from the head domain.
+---
+ fs/exec.c                       |  4 +++
+ include/asm-generic/switch_to.h | 11 ++++--
+ include/ipipe/setup.h           | 10 ++++++
+ include/ipipe/thread_info.h     | 14 ++++++++
+ include/linux/ipipe.h           | 73 ++++++++++++++++++++++++++++++++++++++
+ include/linux/sched.h           |  4 ++-
+ kernel/fork.c                   |  3 ++
+ kernel/ipipe/core.c             | 77 +++++++++++++++++++++++++++++++++++++++++
+ kernel/sched/core.c             | 66 +++++++++++++++++++++++++++++++----
+ kernel/time/timer.c             | 12 ++++++-
+ mm/mmu_context.c                |  4 +++
+ 11 files changed, 268 insertions(+), 10 deletions(-)
+ create mode 100644 include/ipipe/setup.h
+ create mode 100644 include/ipipe/thread_info.h
+
+diff --git a/fs/exec.c b/fs/exec.c
+index 0da4d74..366ff29 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -49,6 +49,7 @@
+ #include <linux/module.h>
+ #include <linux/namei.h>
+ #include <linux/mount.h>
++#include <linux/ipipe.h>
+ #include <linux/security.h>
+ #include <linux/syscalls.h>
+ #include <linux/tsacct_kern.h>
+@@ -1003,6 +1004,7 @@ static int exec_mmap(struct mm_struct *mm)
+ {
+ 	struct task_struct *tsk;
+ 	struct mm_struct *old_mm, *active_mm;
++	unsigned long flags;
+ 
+ 	/* Notify parent that we're no longer interested in the old VM */
+ 	tsk = current;
+@@ -1026,8 +1028,10 @@ static int exec_mmap(struct mm_struct *mm)
+ 	task_lock(tsk);
+ 	active_mm = tsk->active_mm;
+ 	tsk->mm = mm;
++	ipipe_mm_switch_protect(flags);
+ 	tsk->active_mm = mm;
+ 	activate_mm(active_mm, mm);
++	ipipe_mm_switch_unprotect(flags);
+ 	tsk->mm->vmacache_seqnum = 0;
+ 	vmacache_flush(tsk);
+ 	task_unlock(tsk);
+diff --git a/include/asm-generic/switch_to.h b/include/asm-generic/switch_to.h
+index 052c4ac..6472b80 100644
+--- a/include/asm-generic/switch_to.h
++++ b/include/asm-generic/switch_to.h
+@@ -21,10 +21,17 @@
+  */
+ extern struct task_struct *__switch_to(struct task_struct *,
+ 				       struct task_struct *);
+-
++#ifdef CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH
+ #define switch_to(prev, next, last)					\
+ 	do {								\
++		hard_cond_local_irq_disable();                                  \
+ 		((last) = __switch_to((prev), (next)));			\
++		hard_cond_local_irq_enable();                                   \
+ 	} while (0)
+-
++#else /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
++#define switch_to(prev, next, last)					\
++	do {								\
++		((last) = __switch_to((prev), (next)));			\
++	} while (0)
++#endif /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
+ #endif /* __ASM_GENERIC_SWITCH_TO_H */
+diff --git a/include/ipipe/setup.h b/include/ipipe/setup.h
+new file mode 100644
+index 0000000..c2bc521
+--- /dev/null
++++ b/include/ipipe/setup.h
+@@ -0,0 +1,10 @@
++#ifndef _IPIPE_SETUP_H
++#define _IPIPE_SETUP_H
++
++/*
++ * Placeholders for setup hooks defined by client domains.
++ */
++
++static inline void __ipipe_early_client_setup(void) { }
++
++#endif /* !_IPIPE_SETUP_H */
+diff --git a/include/ipipe/thread_info.h b/include/ipipe/thread_info.h
+new file mode 100644
+index 0000000..7038c12
+--- /dev/null
++++ b/include/ipipe/thread_info.h
+@@ -0,0 +1,14 @@
++#ifndef _IPIPE_THREAD_INFO_H
++#define _IPIPE_THREAD_INFO_H
++
++/*
++ * Placeholder for private thread information defined by client
++ * domains.
++ */
++
++struct ipipe_threadinfo {
++};
++
++#define __ipipe_init_threadinfo(__p) do { } while (0)
++
++#endif /* !_IPIPE_THREAD_INFO_H */
+diff --git a/include/linux/ipipe.h b/include/linux/ipipe.h
+index a2e39c1..45ca982 100644
+--- a/include/linux/ipipe.h
++++ b/include/linux/ipipe.h
+@@ -61,6 +61,18 @@ struct ipipe_work_header {
+ 
+ void __ipipe_set_irq_pending(struct ipipe_domain *ipd, unsigned int irq);
+ 
++void __ipipe_complete_domain_migration(void);
++
++int __ipipe_switch_tail(void);
++
++int __ipipe_migrate_head(void);
++
++void __ipipe_reenter_root(void);
++
++void __ipipe_share_current(int flags);
++
++void __ipipe_arch_share_current(int flags);
++
+ /*
+  * Obsolete - no arch implements PIC muting anymore. Null helpers are
+  * kept for building legacy co-kernel releases.
+@@ -68,6 +80,36 @@ struct ipipe_work_header {
+ static inline void ipipe_mute_pic(void) { }
+ static inline void ipipe_unmute_pic(void) { }
+ 
++#ifdef CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH
++
++#define prepare_arch_switch(next)			\
++	do {						\
++		hard_local_irq_enable();		\
++		__ipipe_report_schedule(current, next);	\
++	} while(0)
++
++#ifndef ipipe_get_active_mm
++static inline struct mm_struct *ipipe_get_active_mm(void)
++{
++	return __this_cpu_read(ipipe_percpu.active_mm);
++}
++#define ipipe_get_active_mm ipipe_get_active_mm
++#endif
++
++#else /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
++
++#define prepare_arch_switch(next)			\
++	do {						\
++		__ipipe_report_schedule(current, next);	\
++		hard_local_irq_disable();		\
++	} while(0)
++
++#ifndef ipipe_get_active_mm
++#define ipipe_get_active_mm()	(current->active_mm)
++#endif
++
++#endif /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
++
+ static inline bool __ipipe_hrclock_ok(void)
+ {
+ 	return __ipipe_hrclock_freq != 0;
+@@ -226,6 +268,13 @@ static inline void ipipe_unlock_irq(unsigned int irq)
+ 		__ipipe_unlock_irq(irq);
+ }
+ 
++static inline struct ipipe_threadinfo *ipipe_current_threadinfo(void)
++{
++	return &current_thread_info()->ipipe_data;
++}
++
++#define ipipe_task_threadinfo(p) (&task_thread_info(p)->ipipe_data)
++
+ void ipipe_enable_irq(unsigned int irq);
+ 
+ static inline void ipipe_disable_irq(unsigned int irq)
+@@ -338,13 +387,37 @@ int ipipe_test_ti_thread_flag(struct thread_info *ti, int flag)
+ #define __ipipe_tracer_hrclock_initialized()	do { } while(0)
+ #endif /* !CONFIG_IPIPE_TRACE */
+ 
++#ifdef CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH
++#define ipipe_mm_switch_protect(__flags)	do { (void)(__flags); } while (0)
++#define ipipe_mm_switch_unprotect(__flags)	do { (void)(__flags); } while (0)
++#else /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
++#define ipipe_mm_switch_protect(__flags)		\
++	do {						\
++		(__flags) = hard_local_irq_save();	\
++	} while (0)
++#define ipipe_mm_switch_unprotect(__flags)		\
++	do {						\
++		hard_local_irq_restore(__flags);	\
++	} while (0)
++#endif /* !CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH */
++
+ #else	/* !CONFIG_IPIPE */
+ 
+ #define __ipipe_root_p		1
+ #define ipipe_root_p		1
+ 
++#define ipipe_mm_switch_protect(__flags)	do { (void)(__flags); } while (0)
++#define ipipe_mm_switch_unprotect(__flags)	do { (void)(__flags); } while (0)
++
+ static inline void __ipipe_init_threadflags(struct thread_info *ti) { }
+ 
++static inline void __ipipe_complete_domain_migration(void) { }
++
++static inline int __ipipe_switch_tail(void)
++{
++	return 0;
++}
++
+ static inline void __ipipe_nmi_enter(void) { }
+ 
+ static inline void __ipipe_nmi_exit(void) { }
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index e04919a..2986397 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -82,7 +82,9 @@
+ #define TASK_WAKING			0x0200
+ #define TASK_NOLOAD			0x0400
+ #define TASK_NEW			0x0800
+-#define TASK_STATE_MAX			0x1000
++#define TASK_HARDENING			0x1000
++#define TASK_NOWAKEUP			0x2000
++#define TASK_STATE_MAX			0x4000
+ 
+ /* Convenience macros for the sake of set_current_state: */
+ #define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 91907a3..dcab08c 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -90,6 +90,7 @@
+ #include <linux/kcov.h>
+ #include <linux/livepatch.h>
+ #include <linux/thread_info.h>
++#include <ipipe/thread_info.h>
+ 
+ #include <asm/pgtable.h>
+ #include <asm/pgalloc.h>
+@@ -556,6 +557,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
+ #endif
+ 
+ 	setup_thread_stack(tsk, orig);
++	__ipipe_init_threadflags(task_thread_info(tsk));
++	__ipipe_init_threadinfo(&task_thread_info(tsk)->ipipe_data);
+ 	clear_user_return_notifier(tsk);
+ 	clear_tsk_need_resched(tsk);
+ 	set_task_stack_end_magic(tsk);
+diff --git a/kernel/ipipe/core.c b/kernel/ipipe/core.c
+index cdbecb1..8ee7336 100644
+--- a/kernel/ipipe/core.c
++++ b/kernel/ipipe/core.c
+@@ -1191,6 +1191,71 @@ int __ipipe_notify_kevent(int kevent, void *data)
+ 	return ret;
+ }
+ 
++void __weak ipipe_migration_hook(struct task_struct *p)
++{
++}
++
++static void complete_domain_migration(void) /* hw IRQs off */
++{
++	struct ipipe_percpu_domain_data *p;
++	struct ipipe_percpu_data *pd;
++	struct task_struct *t;
++
++	ipipe_root_only();
++	pd = raw_cpu_ptr(&ipipe_percpu);
++	t = pd->task_hijacked;
++	if (t == NULL)
++		return;
++
++	pd->task_hijacked = NULL;
++	t->state &= ~TASK_HARDENING;
++	if (t->state != TASK_INTERRUPTIBLE)
++		/* Migration aborted (by signal). */
++		return;
++
++	ipipe_set_ti_thread_flag(task_thread_info(t), TIP_HEAD);
++	p = ipipe_this_cpu_head_context();
++	IPIPE_WARN_ONCE(test_bit(IPIPE_STALL_FLAG, &p->status));
++	/*
++	 * hw IRQs are disabled, but the completion hook assumes the
++	 * head domain is logically stalled: fix it up.
++	 */
++	__set_bit(IPIPE_STALL_FLAG, &p->status);
++	ipipe_migration_hook(t);
++	__clear_bit(IPIPE_STALL_FLAG, &p->status);
++	if (__ipipe_ipending_p(p))
++		__ipipe_sync_pipeline(p->domain);
++}
++
++void __ipipe_complete_domain_migration(void)
++{
++	unsigned long flags;
++
++	flags = hard_local_irq_save();
++	complete_domain_migration();
++	hard_local_irq_restore(flags);
++}
++EXPORT_SYMBOL_GPL(__ipipe_complete_domain_migration);
++
++int __ipipe_switch_tail(void)
++{
++	int x;
++
++#ifdef CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH
++	hard_local_irq_disable();
++#endif
++	x = __ipipe_root_p;
++	if (x)
++		complete_domain_migration();
++
++#ifndef CONFIG_IPIPE_WANT_PREEMPTIBLE_SWITCH
++	if (x)
++#endif
++		hard_local_irq_enable();
++
++	return !x;
++}
++
+ static void dispatch_irq_head(unsigned int irq) /* hw interrupts off */
+ {
+ 	struct ipipe_percpu_domain_data *p = ipipe_this_cpu_head_context(), *old;
+@@ -1820,6 +1885,18 @@ void __ipipe_post_work_root(struct ipipe_work_header *work)
+ }
+ EXPORT_SYMBOL_GPL(__ipipe_post_work_root);
+ 
++void __weak __ipipe_arch_share_current(int flags)
++{
++}
++
++void __ipipe_share_current(int flags)
++{
++	ipipe_root_only();
++
++	__ipipe_arch_share_current(flags);
++}
++EXPORT_SYMBOL_GPL(__ipipe_share_current);
++
+ #if defined(CONFIG_DEBUG_ATOMIC_SLEEP) || defined(CONFIG_PROVE_LOCKING) || \
+ 	defined(CONFIG_PREEMPT_VOLUNTARY) || defined(CONFIG_IPIPE_DEBUG_CONTEXT)
+ void __ipipe_uaccess_might_fault(void)
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 6ede3a0..180faaa 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -16,6 +16,7 @@
+ #include <linux/init_task.h>
+ #include <linux/context_tracking.h>
+ #include <linux/rcupdate_wait.h>
++#include <linux/ipipe.h>
+ 
+ #include <linux/blkdev.h>
+ #include <linux/kprobes.h>
+@@ -1999,7 +2000,8 @@ static void ttwu_queue(struct task_struct *p, int cpu, int wake_flags)
+ 	 */
+ 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+ 	smp_mb__after_spinlock();
+-	if (!(p->state & state))
++	if (!(p->state & state) ||
++	    (p->state & (TASK_NOWAKEUP|TASK_HARDENING)))
+ 		goto out;
+ 
+ 	trace_sched_waking(p);
+@@ -2756,6 +2758,7 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
+ 	 * PREEMPT_COUNT kernels).
+ 	 */
+ 
++	__ipipe_complete_domain_migration();
+ 	rq = finish_task_switch(prev);
+ 	balance_callback(rq);
+ 	preempt_enable();
+@@ -2811,6 +2814,9 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
+ 	switch_to(prev, next, prev);
+ 	barrier();
+ 
++	if (unlikely(__ipipe_switch_tail()))
++		return NULL;
++
+ 	return finish_task_switch(prev);
+ }
+ 
+@@ -3197,6 +3203,7 @@ static noinline void __schedule_bug(struct task_struct *prev)
+  */
+ static inline void schedule_debug(struct task_struct *prev)
+ {
++	ipipe_root_only();
+ #ifdef CONFIG_SCHED_STACK_END_CHECK
+ 	if (task_stack_end_corrupted(prev))
+ 		panic("corrupted stack end detected inside scheduler\n");
+@@ -3296,7 +3303,7 @@ static inline void schedule_debug(struct task_struct *prev)
+  *
+  * WARNING: must be called with preemption disabled!
+  */
+-static void __sched notrace __schedule(bool preempt)
++static bool __sched notrace __schedule(bool preempt)
+ {
+ 	struct task_struct *prev, *next;
+ 	unsigned long *switch_count;
+@@ -3385,12 +3392,17 @@ static void __sched notrace __schedule(bool preempt)
+ 
+ 		/* Also unlocks the rq: */
+ 		rq = context_switch(rq, prev, next, &rf);
++  		if (rq == NULL)
++			return true; /* task hijacked by head domain */
+ 	} else {
++		prev->state &= ~TASK_HARDENING;
+ 		rq->clock_update_flags &= ~(RQCF_ACT_SKIP|RQCF_REQ_SKIP);
+ 		rq_unlock_irq(rq, &rf);
+ 	}
+ 
+ 	balance_callback(rq);
++
++	return false;
+ }
+ 
+ void __noreturn do_task_dead(void)
+@@ -3428,7 +3440,8 @@ asmlinkage __visible void __sched schedule(void)
+ 	sched_submit_work(tsk);
+ 	do {
+ 		preempt_disable();
+-		__schedule(false);
++		if (__schedule(false))
++			return;
+ 		sched_preempt_enable_no_resched();
+ 	} while (need_resched());
+ }
+@@ -3508,7 +3521,8 @@ static void __sched notrace preempt_schedule_common(void)
+ 		 */
+ 		preempt_disable_notrace();
+ 		preempt_latency_start(1);
+-		__schedule(true);
++		if (__schedule(true))
++			return;
+ 		preempt_latency_stop(1);
+ 		preempt_enable_no_resched_notrace();
+ 
+@@ -3531,7 +3545,7 @@ asmlinkage __visible void __sched notrace preempt_schedule(void)
+ 	 * If there is a non-zero preempt_count or interrupts are disabled,
+ 	 * we do not want to preempt the current task. Just return..
+ 	 */
+-	if (likely(!preemptible()))
++	if (likely(!preemptible() || !ipipe_root_p))
+ 		return;
+ 
+ 	preempt_schedule_common();
+@@ -3557,7 +3571,7 @@ asmlinkage __visible void __sched notrace preempt_schedule_notrace(void)
+ {
+ 	enum ctx_state prev_ctx;
+ 
+-	if (likely(!preemptible()))
++	if (likely(!preemptible() || !ipipe_root_p || hard_irqs_disabled()))
+ 		return;
+ 
+ 	do {
+@@ -4219,6 +4233,7 @@ static int __sched_setscheduler(struct task_struct *p,
+ 
+ 	prev_class = p->sched_class;
+ 	__setscheduler(rq, p, attr, pi);
++  	__ipipe_report_setsched(p);
+ 
+ 	if (queued) {
+ 		/*
+@@ -5779,6 +5794,45 @@ int in_sched_functions(unsigned long addr)
+ 		&& addr < (unsigned long)__sched_text_end);
+ }
+ 
++#ifdef CONFIG_IPIPE
++
++int __ipipe_migrate_head(void)
++{
++	struct task_struct *p = current;
++
++	preempt_disable();
++
++	IPIPE_WARN_ONCE(__this_cpu_read(ipipe_percpu.task_hijacked) != NULL);
++
++	__this_cpu_write(ipipe_percpu.task_hijacked, p);
++	set_current_state(TASK_INTERRUPTIBLE | TASK_HARDENING);
++	sched_submit_work(p);
++	if (likely(__schedule(false)))
++		return 0;
++
++	BUG_ON(!signal_pending(p));
++
++	preempt_enable();
++	return -ERESTARTSYS;
++}
++EXPORT_SYMBOL_GPL(__ipipe_migrate_head);
++
++void __ipipe_reenter_root(void)
++{
++	struct rq *rq;
++	struct task_struct *p;
++
++	p = __this_cpu_read(ipipe_percpu.rqlock_owner);
++	BUG_ON(p == NULL);
++	ipipe_clear_thread_flag(TIP_HEAD);
++	rq = finish_task_switch(p);
++	balance_callback(rq);
++	preempt_enable_no_resched_notrace();
++}
++EXPORT_SYMBOL_GPL(__ipipe_reenter_root);
++
++#endif /* CONFIG_IPIPE */
++
+ #ifdef CONFIG_CGROUP_SCHED
+ /*
+  * Default task group.
+diff --git a/kernel/time/timer.c b/kernel/time/timer.c
+index 9fe525f..2ca4478 100644
+--- a/kernel/time/timer.c
++++ b/kernel/time/timer.c
+@@ -22,6 +22,7 @@
+ #include <linux/kernel_stat.h>
+ #include <linux/export.h>
+ #include <linux/interrupt.h>
++#include <linux/ipipe.h>
+ #include <linux/percpu.h>
+ #include <linux/init.h>
+ #include <linux/mm.h>
+@@ -1574,6 +1575,15 @@ static inline int collect_expired_timers(struct timer_base *base,
+ }
+ #endif
+ 
++static inline void do_account_tick(struct task_struct *p, int user_tick)
++{
++#ifdef CONFIG_IPIPE
++	if (!__ipipe_root_tick_p(raw_cpu_ptr(&ipipe_percpu.tick_regs)))
++		return;
++#endif
++	account_process_tick(p, user_tick);
++}
++
+ /*
+  * Called from the timer interrupt handler to charge one tick to the current
+  * process.  user_tick is 1 if the tick is user time, 0 for system.
+@@ -1583,7 +1593,7 @@ void update_process_times(int user_tick)
+ 	struct task_struct *p = current;
+ 
+ 	/* Note: this timer irq context must be accounted for as well. */
+-	account_process_tick(p, user_tick);
++	do_account_tick(p, user_tick);
+ 	run_local_timers();
+ 	rcu_check_callbacks(user_tick);
+ #ifdef CONFIG_IRQ_WORK
+diff --git a/mm/mmu_context.c b/mm/mmu_context.c
+index 3e612ae..e0a04a7 100644
+--- a/mm/mmu_context.c
++++ b/mm/mmu_context.c
+@@ -9,6 +9,7 @@
+ #include <linux/sched/task.h>
+ #include <linux/mmu_context.h>
+ #include <linux/export.h>
++#include <linux/ipipe.h>
+ 
+ #include <asm/mmu_context.h>
+ 
+@@ -23,15 +24,18 @@ void use_mm(struct mm_struct *mm)
+ {
+ 	struct mm_struct *active_mm;
+ 	struct task_struct *tsk = current;
++	unsigned long flags;
+ 
+ 	task_lock(tsk);
+ 	active_mm = tsk->active_mm;
++ 	ipipe_mm_switch_protect(flags);
+ 	if (active_mm != mm) {
+ 		mmgrab(mm);
+ 		tsk->active_mm = mm;
+ 	}
+ 	tsk->mm = mm;
+ 	switch_mm(active_mm, mm, tsk);
++ 	ipipe_mm_switch_unprotect(flags);
+ 	task_unlock(tsk);
+ #ifdef finish_arch_post_lock_switch
+ 	finish_arch_post_lock_switch();
+-- 
+1.9.1
+

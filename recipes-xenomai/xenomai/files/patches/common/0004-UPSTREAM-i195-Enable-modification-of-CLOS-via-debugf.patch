@@ -1,0 +1,69 @@
+From d5c3a710b46c994aa857a94b76853645e04c0d0d Mon Sep 17 00:00:00 2001
+From: Reinette Chatre <reinette.chatre@intel.com>
+Date: Mon, 27 Mar 2017 12:23:23 -0700
+Subject: [PATCH 4/4] !UPSTREAM: i195: Enable modification of CLOS via debugfs
+ (WIP)
+
+By default the graphics device is configured to use as much of cache as
+possible. The cache used by the device does not appear in the "Bitmask
+of Shareable Resource with Other executing entities" found in EBX during
+enumeration of RDT/CAT. There is thus currently no way to detect or
+configure the cache usage between CAT and i915 to ensure expected cache
+boundaries are respected.
+
+The existing i915_cache_sharing debugfs file enables user to modify the
+active CLOS for the non-render targets on GEN6 and GEN7 hardware. This
+feature is supported on later hardware so we enable this modification
+for GEN9 also (FIXME: how to enable for GEN6+?) in order to test on APL.
+
+In addition, we add the ability to set the same CLOS not just for
+non-render targets, but for render targets also.
+
+When a user thus writes the minimum CLOS (3) to this debugfs file, the
+cache usage for both render and non-render targets will be restricted to
+the top 1/16th way of the cache (for 16 way cache).
+
+FIXME: commit is only created for testing on APL. We need to work with
+graphics folks on the right solution.
+
+Upstreamable solution is being tracked in:
+ https://jira01.devtools.intel.com/browse/RT-144
+
+Not-signed-off-by: Reinette Chatre <reinette.chatre@intel.com>
+---
+ drivers/gpu/drm/i915/i915_debugfs.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/i915/i915_debugfs.c b/drivers/gpu/drm/i915/i915_debugfs.c
+index 17c0744..7b03663 100644
+--- a/drivers/gpu/drm/i915/i915_debugfs.c
++++ b/drivers/gpu/drm/i915/i915_debugfs.c
+@@ -4596,7 +4596,7 @@ static ssize_t cur_wm_latency_write(struct file *file, const char __user *ubuf,
+ 	struct drm_i915_private *dev_priv = data;
+ 	u32 snpcr;
+ 
+-	if (!(IS_GEN6(dev_priv) || IS_GEN7(dev_priv)))
++	if (!(IS_GEN6(dev_priv) || IS_GEN7(dev_priv) || IS_GEN9(dev_priv)))
+ 		return -ENODEV;
+ 
+ 	intel_runtime_pm_get(dev_priv);
+@@ -4616,7 +4616,7 @@ static ssize_t cur_wm_latency_write(struct file *file, const char __user *ubuf,
+ 	struct drm_i915_private *dev_priv = data;
+ 	u32 snpcr;
+ 
+-	if (!(IS_GEN6(dev_priv) || IS_GEN7(dev_priv)))
++	if (!(IS_GEN6(dev_priv) || IS_GEN7(dev_priv) || IS_GEN9(dev_priv)))
+ 		return -ENODEV;
+ 
+ 	if (val > 3)
+@@ -4630,6 +4630,7 @@ static ssize_t cur_wm_latency_write(struct file *file, const char __user *ubuf,
+ 	snpcr &= ~GEN6_MBC_SNPCR_MASK;
+ 	snpcr |= (val << GEN6_MBC_SNPCR_SHIFT);
+ 	I915_WRITE(GEN6_MBCUNIT_SNPCR, snpcr);
++	I915_WRITE(HSW_IDICR, I915_READ(HSW_IDICR) | IDIHASHMSK(0xf) | val << 22);
+ 
+ 	intel_runtime_pm_put(dev_priv);
+ 	return 0;
+-- 
+1.9.1
+

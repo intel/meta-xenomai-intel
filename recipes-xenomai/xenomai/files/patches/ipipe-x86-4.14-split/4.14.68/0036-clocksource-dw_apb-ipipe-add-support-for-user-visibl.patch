@@ -1,0 +1,167 @@
+From 18c3300055381561e9fc9a658f0c83031d360343 Mon Sep 17 00:00:00 2001
+From: Gilles Chanteperdrix <gilles.chanteperdrix@xenomai.org>
+Date: Sun, 3 Dec 2017 17:41:51 +0100
+Subject: [PATCH 036/137] clocksource: dw_apb: ipipe: add support for
+ user-visible TSC
+
+Expose the clocksource to userland processes via the ARM-specific
+user-TSC interface if enabled.
+---
+ drivers/clocksource/dw_apb_timer.c    | 21 ++++++++++++++++++++-
+ drivers/clocksource/dw_apb_timer_of.c | 19 +++++++++++++------
+ include/linux/dw_apb_timer.h          |  3 ++-
+ 3 files changed, 35 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/clocksource/dw_apb_timer.c b/drivers/clocksource/dw_apb_timer.c
+index 1f5f734..092fc15 100644
+--- a/drivers/clocksource/dw_apb_timer.c
++++ b/drivers/clocksource/dw_apb_timer.c
+@@ -15,6 +15,7 @@
+ #include <linux/kernel.h>
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
++#include <linux/ipipe.h>
+ #include <linux/io.h>
+ #include <linux/slab.h>
+ 
+@@ -384,7 +385,7 @@ static void apbt_restart_clocksource(struct clocksource *cs)
+  */
+ struct dw_apb_clocksource *
+ dw_apb_clocksource_init(unsigned rating, const char *name, void __iomem *base,
+-			unsigned long freq)
++			unsigned long phys, unsigned long freq)
+ {
+ 	struct dw_apb_clocksource *dw_cs = kzalloc(sizeof(*dw_cs), GFP_KERNEL);
+ 
+@@ -399,10 +400,22 @@ struct dw_apb_clocksource *
+ 	dw_cs->cs.mask = CLOCKSOURCE_MASK(32);
+ 	dw_cs->cs.flags = CLOCK_SOURCE_IS_CONTINUOUS;
+ 	dw_cs->cs.resume = apbt_restart_clocksource;
++	dw_cs->phys = phys;
+ 
+ 	return dw_cs;
+ }
+ 
++#ifdef CONFIG_IPIPE
++static struct __ipipe_tscinfo apb_tsc_info = {
++	.type = IPIPE_TSC_TYPE_FREERUNNING_COUNTDOWN,
++	.u = {
++		.dec = {
++			.mask = 0xffffffffU,
++		},
++	},
++};
++#endif
++
+ /**
+  * dw_apb_clocksource_register() - register the APB clocksource.
+  *
+@@ -411,6 +424,12 @@ struct dw_apb_clocksource *
+ void dw_apb_clocksource_register(struct dw_apb_clocksource *dw_cs)
+ {
+ 	clocksource_register_hz(&dw_cs->cs, dw_cs->timer.freq);
++#ifdef CONFIG_IPIPE
++	apb_tsc_info.u.dec.counter = (void *)(dw_cs->phys + APBTMR_N_CURRENT_VALUE);
++	apb_tsc_info.counter_vaddr = (unsigned long)dw_cs->timer.base + APBTMR_N_CURRENT_VALUE;
++	apb_tsc_info.freq = dw_cs->timer.freq;
++	__ipipe_tsc_register(&apb_tsc_info);
++#endif
+ }
+ 
+ /**
+diff --git a/drivers/clocksource/dw_apb_timer_of.c b/drivers/clocksource/dw_apb_timer_of.c
+index 69866cd..559a75f 100644
+--- a/drivers/clocksource/dw_apb_timer_of.c
++++ b/drivers/clocksource/dw_apb_timer_of.c
+@@ -25,16 +25,20 @@
+ #include <linux/sched_clock.h>
+ 
+ static void __init timer_get_base_and_rate(struct device_node *np,
+-				    void __iomem **base, u32 *rate)
++					   void __iomem **base, unsigned long *phys,
++					   u32 *rate)
+ {
+ 	struct clk *timer_clk;
++	struct resource res;
+ 	struct clk *pclk;
+ 
+ 	*base = of_iomap(np, 0);
+ 
+-	if (!*base)
++	if (!*base || of_address_to_resource(np, 0, &res))
+ 		panic("Unable to map regs for %s", np->name);
+ 
++	*phys = res.start;
++	
+ 	/*
+ 	 * Not all implementations use a periphal clock, so don't panic
+ 	 * if it's not present
+@@ -64,13 +68,14 @@ static void __init add_clockevent(struct device_node *event_timer)
+ {
+ 	void __iomem *iobase;
+ 	struct dw_apb_clock_event_device *ced;
++	unsigned long phys;
+ 	u32 irq, rate;
+ 
+ 	irq = irq_of_parse_and_map(event_timer, 0);
+ 	if (irq == 0)
+ 		panic("No IRQ for clock event timer");
+ 
+-	timer_get_base_and_rate(event_timer, &iobase, &rate);
++	timer_get_base_and_rate(event_timer, &iobase, &phys, &rate);
+ 
+ 	ced = dw_apb_clockevent_init(0, event_timer->name, 300, iobase, irq,
+ 				     rate);
+@@ -87,11 +92,12 @@ static void __init add_clocksource(struct device_node *source_timer)
+ {
+ 	void __iomem *iobase;
+ 	struct dw_apb_clocksource *cs;
++	unsigned long phys;
+ 	u32 rate;
+ 
+-	timer_get_base_and_rate(source_timer, &iobase, &rate);
++	timer_get_base_and_rate(source_timer, &iobase, &phys, &rate);
+ 
+-	cs = dw_apb_clocksource_init(300, source_timer->name, iobase, rate);
++	cs = dw_apb_clocksource_init(300, source_timer->name, iobase, phys, rate);
+ 	if (!cs)
+ 		panic("Unable to initialise clocksource device");
+ 
+@@ -120,11 +126,12 @@ static u64 notrace read_sched_clock(void)
+ static void __init init_sched_clock(void)
+ {
+ 	struct device_node *sched_timer;
++	unsigned long phys;
+ 
+ 	sched_timer = of_find_matching_node(NULL, sptimer_ids);
+ 	if (sched_timer) {
+ 		timer_get_base_and_rate(sched_timer, &sched_io_base,
+-					&sched_rate);
++					&phys, &sched_rate);
+ 		of_node_put(sched_timer);
+ 	}
+ 
+diff --git a/include/linux/dw_apb_timer.h b/include/linux/dw_apb_timer.h
+index 4334106..ea79e3a 100644
+--- a/include/linux/dw_apb_timer.h
++++ b/include/linux/dw_apb_timer.h
+@@ -35,6 +35,7 @@ struct dw_apb_clock_event_device {
+ struct dw_apb_clocksource {
+ 	struct dw_apb_timer			timer;
+ 	struct clocksource			cs;
++	unsigned long				phys;
+ };
+ 
+ void dw_apb_clockevent_register(struct dw_apb_clock_event_device *dw_ced);
+@@ -47,7 +48,7 @@ struct dw_apb_clock_event_device *
+ 		       void __iomem *base, int irq, unsigned long freq);
+ struct dw_apb_clocksource *
+ dw_apb_clocksource_init(unsigned rating, const char *name, void __iomem *base,
+-			unsigned long freq);
++			unsigned long phys, unsigned long freq);
+ void dw_apb_clocksource_register(struct dw_apb_clocksource *dw_cs);
+ void dw_apb_clocksource_start(struct dw_apb_clocksource *dw_cs);
+ u64 dw_apb_clocksource_read(struct dw_apb_clocksource *dw_cs);
+-- 
+1.9.1
+

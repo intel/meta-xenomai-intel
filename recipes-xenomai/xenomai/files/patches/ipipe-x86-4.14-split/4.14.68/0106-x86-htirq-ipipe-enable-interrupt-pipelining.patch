@@ -1,0 +1,51 @@
+From 83bc38b913449568fce7f1fc902b9fcbd97cd1ec Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 12:35:54 +0100
+Subject: [PATCH 106/137] x86/htirq: ipipe: enable interrupt pipelining
+
+The Hypertransport handlers for masking/unmasking IRQs are invoked by
+the pipeline core for dealing with incoming PCI interrupts from an
+out-of-band context.
+
+To this end, we have to turn the original spinlock into a hard
+pipeline lock for proper serialization.
+
+In addition, make sure to fix up the HT irq_chip descriptor
+appropriately.
+---
+ arch/x86/kernel/apic/htirq.c | 5 ++++-
+ drivers/pci/htirq.c          | 2 +-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kernel/apic/htirq.c b/arch/x86/kernel/apic/htirq.c
+index 741de28..940ca3a 100644
+--- a/arch/x86/kernel/apic/htirq.c
++++ b/arch/x86/kernel/apic/htirq.c
+@@ -59,7 +59,10 @@
+ 	.irq_ack		= irq_chip_ack_parent,
+ 	.irq_set_affinity	= ht_set_affinity,
+ 	.irq_retrigger		= irq_chip_retrigger_hierarchy,
+-	.flags			= IRQCHIP_SKIP_SET_WAKE,
++#if defined(CONFIG_IPIPE) && defined(CONFIG_SMP)
++	.irq_move		= move_xxapic_irq,
++#endif
++	.flags			= IRQCHIP_SKIP_SET_WAKE|IRQCHIP_PIPELINE_SAFE,
+ };
+ 
+ static int htirq_domain_alloc(struct irq_domain *domain, unsigned int virq,
+diff --git a/drivers/pci/htirq.c b/drivers/pci/htirq.c
+index bb88c26..15be651 100644
+--- a/drivers/pci/htirq.c
++++ b/drivers/pci/htirq.c
+@@ -22,7 +22,7 @@
+  * With multiple simultaneous hypertransport irq devices it might pay
+  * to make this more fine grained.  But start with simple, stupid, and correct.
+  */
+-static DEFINE_SPINLOCK(ht_irq_lock);
++static IPIPE_DEFINE_SPINLOCK(ht_irq_lock);
+ 
+ void write_ht_irq_msg(unsigned int irq, struct ht_irq_msg *msg)
+ {
+-- 
+1.9.1
+

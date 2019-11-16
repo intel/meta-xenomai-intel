@@ -1,0 +1,32 @@
+From 4924717ec5cbc694afc1b91ba7d525b80901d44d Mon Sep 17 00:00:00 2001
+From: Jan Kiszka <jan.kiszka@siemens.com>
+Date: Tue, 9 Oct 2018 11:17:11 +0200
+Subject: [PATCH 17/21] cobalt/posix/mqueue: Fix crash after failing
+ registration
+
+If xnregistry_enter in mq_open fails, the new entry will not be added to
+cobalt_mqq. But the cleanup path taken afterwards will nevertheless try
+to remove it from there. That will cause a crash because the mq->link is
+uninitialized. Fix that by initializing it as list head so that list
+removal becomes harmless, even when the entry is not on any list..
+
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ kernel/cobalt/posix/mqueue.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/cobalt/posix/mqueue.c b/kernel/cobalt/posix/mqueue.c
+index ca1f085..e76d8df 100644
+--- a/kernel/cobalt/posix/mqueue.c
++++ b/kernel/cobalt/posix/mqueue.c
+@@ -151,6 +151,7 @@ static inline int mq_init(struct cobalt_mq *mq, const struct mq_attr *attr)
+ 	xnselect_init(&mq->write_select);
+ 	mq->magic = COBALT_MQ_MAGIC;
+ 	mq->refs = 2;
++	INIT_LIST_HEAD(&mq->link);
+ 
+ 	return 0;
+ }
+-- 
+1.9.1
+

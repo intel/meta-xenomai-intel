@@ -1,0 +1,29 @@
+From 073577f472d5aaaf5a6135a2424d965b040e67a3 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 6 Feb 2018 13:33:00 +0100
+Subject: [PATCH 116/137] x86/mmx32: ipipe: use slow copy from head domain
+
+Using the MMX unit from the head domain requires the co-kernel to deal
+with preemption of sections delimited by kernel_fpu_begin <->
+kernel_fpu_end, which is a burden when it comes to scheduling its own
+fpu-enabled tasks in between. Branch to the generic memcpy instead.
+---
+ arch/x86/lib/mmx_32.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/lib/mmx_32.c b/arch/x86/lib/mmx_32.c
+index 4321fa0..1d9ad8f 100644
+--- a/arch/x86/lib/mmx_32.c
++++ b/arch/x86/lib/mmx_32.c
+@@ -31,7 +31,7 @@ void *_mmx_memcpy(void *to, const void *from, size_t len)
+ 	void *p;
+ 	int i;
+ 
+-	if (unlikely(in_interrupt()))
++	if (unlikely(!ipipe_root_p || in_interrupt()))
+ 		return __memcpy(to, from, len);
+ 
+ 	p = to;
+-- 
+1.9.1
+

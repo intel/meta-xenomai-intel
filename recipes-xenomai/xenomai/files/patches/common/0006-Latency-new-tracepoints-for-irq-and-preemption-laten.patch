@@ -1,0 +1,376 @@
+From 856c5d5e1c2164d7a10bc5f486d8fa1c8babe44b Mon Sep 17 00:00:00 2001
+From: Baohong Liu <baohong.liu@intel.com>
+Date: Fri, 29 Sep 2017 19:06:30 -0700
+Subject: [PATCH 6/6] Latency: new tracepoints for irq and preemption latencies
+
+Six tracepoints are added for irq on/off, preemption on/off,
+and preemption/irqs on/off. With the recently introduced
+synthetic event mechanism, these tracepoints can be used to
+generate latency histograms for irq off period, preemption off
+period, and both preemption and irqs off period.
+
+Signed-off-by: Baohong Liu <baohong.liu@intel.com>
+
+Conflicts:
+	kernel/trace/trace_irqsoff.c
+---
+ include/trace/events/preemptirqs_onoff.h | 120 +++++++++++++++++++++++++++++++
+ kernel/trace/Kconfig                     |  42 +++++++++++
+ kernel/trace/Makefile                    |   2 +
+ kernel/trace/preemptirqs_onoff_helper.h  |  17 +++++
+ kernel/trace/trace_irqsoff.c             |  13 ++++
+ kernel/trace/trace_preemptirqs_onoff.c   |  67 +++++++++++++++++
+ 6 files changed, 261 insertions(+)
+ create mode 100644 include/trace/events/preemptirqs_onoff.h
+ create mode 100644 kernel/trace/preemptirqs_onoff_helper.h
+ create mode 100644 kernel/trace/trace_preemptirqs_onoff.c
+
+diff --git a/include/trace/events/preemptirqs_onoff.h b/include/trace/events/preemptirqs_onoff.h
+new file mode 100644
+index 0000000..8906390
+--- /dev/null
++++ b/include/trace/events/preemptirqs_onoff.h
+@@ -0,0 +1,120 @@
++#undef TRACE_SYSTEM
++#define TRACE_SYSTEM preemptirqs_onoff
++
++#if !defined(_TRACE_PREEMPTIRQS_ONOFF_H) || defined(TRACE_HEADER_MULTI_READ)
++#define _TRACE_PREEMPTIRQS_ONOFF_H
++
++#include <linux/tracepoint.h>
++
++#if defined(CONFIG_IRQS_ONOFF_TRACER)
++TRACE_EVENT(irqson,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++
++TRACE_EVENT(irqsoff,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++#endif
++
++#if defined(CONFIG_PREEMPT_ONOFF_TRACER)
++TRACE_EVENT(preempton,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++
++TRACE_EVENT(preemptoff,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++#endif
++
++#if defined(CONFIG_IRQS_ONOFF_TRACER) && defined(CONFIG_PREEMPT_ONOFF_TRACER)
++TRACE_EVENT(preemptorirqson,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++
++TRACE_EVENT(preemptandirqsoff,
++
++	TP_PROTO(int cpu_id),
++
++	TP_ARGS(cpu_id),
++
++	TP_STRUCT__entry(
++		__field(int,	cpu_id)
++	),
++
++	TP_fast_assign(
++		__entry->cpu_id = cpu_id;
++	),
++
++	TP_printk("cpu# %d", __entry->cpu_id)
++);
++#endif
++
++#endif /*  _TRACE_PREEMPTIRQS_ONOFF_H */
++
++/* This part must be outside protection */
++#include <trace/define_trace.h>
+diff --git a/kernel/trace/Kconfig b/kernel/trace/Kconfig
+index a01634e..bcc8101 100644
+--- a/kernel/trace/Kconfig
++++ b/kernel/trace/Kconfig
+@@ -220,6 +220,48 @@ config PREEMPT_TRACER
+ 	  enabled. This option and the irqs-off timing option can be
+ 	  used together or separately.)
+ 
++config IRQS_ONOFF_TRACER
++	bool "Interrupts-on/off Tracer"
++	default n
++	depends on IRQSOFF_TRACER
++	help
++	  This option adds two new tracepoints "irqsoff" and "irqson".
++
++	  They can be used as normal trace events and can also be used
++	  together with a synthetic event to generate irqsoff histogram.
++
++	  They are disabled by default.
++
++	     echo 0 > /sys/kernel/debug/tracing/events/preemptirqs_onoff/enable
++
++	  (Note that kernel size and overhead increase with this option
++	  enabled.)
++
++config PREEMPT_ONOFF_TRACER
++	bool "Preemption-on/off Tracer"
++	default n
++	depends on PREEMPT_TRACER
++	help
++	  This option adds two new tracepoints "preemptoff" and "preempton".
++
++	  They can be used as normal trace events and can also be used
++	  together with a synthetic event to generate preemptoff histogram.
++
++	  They are disabled by default.
++
++	     echo 0 > /sys/kernel/debug/tracing/events/preemptirqs_onoff/enable
++
++	  This option and the IRQS_ONOFF_TRACER option can be used together or
++	  separately. If they are used together, two new tracepoints will
++	  become avaliable which are "preemptandirqsoff" and "preemptorirqson".
++	  They can be used as normal trace events and can also be used together
++	  with a synthetic event to generate histogram for the case in which
++	  both irqs and preemption are off.
++
++	  (Note that kernel size and overhead increase with this option
++	  enabled. This option and the irqs-off timing option can be
++	  used together or separately.)
++
+ config SCHED_TRACER
+ 	bool "Scheduling Latency Tracer"
+ 	select GENERIC_TRACER
+diff --git a/kernel/trace/Makefile b/kernel/trace/Makefile
+index e2538c7..8538586 100644
+--- a/kernel/trace/Makefile
++++ b/kernel/trace/Makefile
+@@ -38,6 +38,8 @@ obj-$(CONFIG_FUNCTION_TRACER) += trace_functions.o
+ obj-$(CONFIG_PREEMPTIRQ_EVENTS) += trace_irqsoff.o
+ obj-$(CONFIG_IRQSOFF_TRACER) += trace_irqsoff.o
+ obj-$(CONFIG_PREEMPT_TRACER) += trace_irqsoff.o
++obj-$(CONFIG_IRQS_ONOFF_TRACER) += trace_preemptirqs_onoff.o
++obj-$(CONFIG_PREEMPT_ONOFF_TRACER) += trace_preemptirqs_onoff.o
+ obj-$(CONFIG_SCHED_TRACER) += trace_sched_wakeup.o
+ obj-$(CONFIG_HWLAT_TRACER) += trace_hwlat.o
+ obj-$(CONFIG_NOP_TRACER) += trace_nop.o
+diff --git a/kernel/trace/preemptirqs_onoff_helper.h b/kernel/trace/preemptirqs_onoff_helper.h
+new file mode 100644
+index 0000000..223598f
+--- /dev/null
++++ b/kernel/trace/preemptirqs_onoff_helper.h
+@@ -0,0 +1,17 @@
++#if !defined(_TRACE_PREEMPTIRQS_ONOFF_HELPER_H)
++#define _TRACE_PREEMPTIRQS_ONOFF_HELPER_H
++
++enum preemptirqs_onoff_action {
++	IRQS_ON,
++	IRQS_OFF,
++	PREEMPT_ON,
++	PREEMPT_OFF
++};
++
++#if !defined(CONFIG_IRQS_ONOFF_TRACER) && !defined(CONFIG_PREEMPT_ONOFF_TRACER)
++#define preemptirqs_onoff_helper(a)
++#else
++void preemptirqs_onoff_helper(enum preemptirqs_onoff_action action);
++#endif
++
++#endif /*  _TRACE_PREEMPTIRQS_ONOFF_HELPER_H */
+diff --git a/kernel/trace/trace_irqsoff.c b/kernel/trace/trace_irqsoff.c
+index 1c2381b..c2bff99 100644
+--- a/kernel/trace/trace_irqsoff.c
++++ b/kernel/trace/trace_irqsoff.c
+@@ -20,6 +20,9 @@
+ #include <trace/events/preemptirq.h>
+ 
+ #if defined(CONFIG_IRQSOFF_TRACER) || defined(CONFIG_PREEMPT_TRACER)
++
++#include "preemptirqs_onoff_helper.h"
++
+ static struct trace_array		*irqsoff_trace __read_mostly;
+ static int				tracer_enabled __read_mostly;
+ 
+@@ -483,6 +486,8 @@ static inline void tracer_hardirqs_on_virt(void)
+ 
+ static inline void tracer_hardirqs_off(void)
+ {
++	preemptirqs_onoff_helper(IRQS_ON);
++
+ 	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		start_critical_timing(CALLER_ADDR0, CALLER_ADDR1);
+ }
+@@ -491,6 +496,8 @@ static inline void tracer_hardirqs_on_caller(unsigned long caller_addr)
+ {
+ 	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		stop_critical_timing(CALLER_ADDR0, caller_addr);
++
++	preemptirqs_onoff_helper(IRQS_OFF);
+ }
+ 
+ static inline void tracer_hardirqs_on_virt_caller(unsigned long caller_addr)
+@@ -502,6 +509,8 @@ static inline void tracer_hardirqs_on_virt_caller(unsigned long caller_addr)
+ 	 */
+ 	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		stop_critical_timing(CALLER_ADDR0, caller_addr);
++
++	preemptirqs_onoff_helper(IRQS_OFF);
+ }
+ 
+ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr)
+@@ -516,12 +525,16 @@ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr)
+ #ifdef CONFIG_PREEMPT_TRACER
+ static inline void tracer_preempt_on(unsigned long a0, unsigned long a1)
+ {
++	preemptirqs_onoff_helper(PREEMPT_ON);
++
+ 	if (preempt_trace() && !irq_trace())
+ 		stop_critical_timing(a0, a1);
+ }
+ 
+ static inline void tracer_preempt_off(unsigned long a0, unsigned long a1)
+ {
++	preemptirqs_onoff_helper(PREEMPT_OFF);
++
+ 	if (preempt_trace() && !irq_trace())
+ 		start_critical_timing(a0, a1);
+ }
+diff --git a/kernel/trace/trace_preemptirqs_onoff.c b/kernel/trace/trace_preemptirqs_onoff.c
+new file mode 100644
+index 0000000..2120ce6
+--- /dev/null
++++ b/kernel/trace/trace_preemptirqs_onoff.c
+@@ -0,0 +1,67 @@
++/*
++ * trace irqs off preempt off preemptirqs off
++ *
++ *  Copyright (C) 2017
++ */
++#include <linux/ftrace.h>
++
++#include "trace.h"
++
++#include "preemptirqs_onoff_helper.h"
++
++#define CREATE_TRACE_POINTS
++#include <trace/events/preemptirqs_onoff.h>
++
++#if defined(CONFIG_IRQS_ONOFF_TRACER)
++static DEFINE_PER_CPU(int, irqs_off_counting);
++#endif
++
++#if defined(CONFIG_PREEMPT_ONOFF_TRACER)
++static DEFINE_PER_CPU(int, preempt_off_counting);
++#endif
++
++void preemptirqs_onoff_helper(enum preemptirqs_onoff_action action)
++{
++	int cpu = raw_smp_processor_id();
++
++	switch (action) {
++#if defined(CONFIG_IRQS_ONOFF_TRACER)
++	case IRQS_ON:
++		if (per_cpu(irqs_off_counting, cpu)) {
++			trace_irqson(cpu);
++#if defined(CONFIG_PREEMPT_ONOFF_TRACER)
++			if (per_cpu(preempt_off_counting, cpu))
++				trace_preemptorirqson(cpu);
++#endif
++			per_cpu(irqs_off_counting, cpu) = 0;
++		}
++		break;
++	case IRQS_OFF:
++		if (!per_cpu(irqs_off_counting, cpu)) {
++			trace_irqsoff(cpu);
++#if defined(CONFIG_PREEMPT_ONOFF_TRACER)
++			if (per_cpu(preempt_off_counting, cpu))
++				trace_preemptandirqsoff(cpu);
++#endif
++			per_cpu(irqs_off_counting, cpu) = 1;
++		}
++		break;
++#endif
++#if defined(CONFIG_PREEMPT_ONOFF_TRACER)
++	case PREEMPT_ON:
++		if (per_cpu(preempt_off_counting, cpu)) {
++			trace_preempton(cpu);
++			per_cpu(preempt_off_counting, cpu) = 0;
++		}
++		break;
++	case PREEMPT_OFF:
++		if (!per_cpu(preempt_off_counting, cpu)) {
++			trace_preemptoff(cpu);
++			per_cpu(preempt_off_counting, cpu) = 1;
++		}
++		break;
++#endif
++	default:
++		return;
++	}
++}
+-- 
+1.9.1
+

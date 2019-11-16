@@ -1,0 +1,186 @@
+From 50d72bff2a175d3c495318b0c1488564fded36af Mon Sep 17 00:00:00 2001
+From: Peter Zijlstra <peterz@infradead.org>
+Date: Wed, 11 Oct 2017 09:45:29 +0200
+Subject: [PATCH 24/66] perf/ftrace: Revert ("perf/ftrace: Fix double traces of
+ perf on ftrace:function")
+
+Revert commit:
+
+  75e8387685f6 ("perf/ftrace: Fix double traces of perf on ftrace:function")
+
+The reason I instantly stumbled on that patch is that it only addresses the
+ftrace situation and doesn't mention the other _5_ places that use this
+interface. It doesn't explain why those don't have the problem and if not, why
+their solution doesn't work for ftrace.
+
+It doesn't, but this is just putting more duct tape on.
+
+Link: http://lkml.kernel.org/r/20171011080224.200565770@infradead.org
+
+Cc: Zhou Chengming <zhouchengming1@huawei.com>
+Cc: Jiri Olsa <jolsa@kernel.org>
+Cc: Ingo Molnar <mingo@kernel.org>
+Signed-off-by: Peter Zijlstra (Intel) <peterz@infradead.org>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/linux/perf_event.h      |  2 +-
+ include/linux/trace_events.h    |  4 ++--
+ kernel/events/core.c            | 13 ++++---------
+ kernel/trace/trace_event_perf.c |  4 +---
+ kernel/trace/trace_kprobe.c     |  4 ++--
+ kernel/trace/trace_syscalls.c   |  4 ++--
+ kernel/trace/trace_uprobe.c     |  2 +-
+ 7 files changed, 13 insertions(+), 20 deletions(-)
+
+diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
+index 8e22f24..569d1b5 100644
+--- a/include/linux/perf_event.h
++++ b/include/linux/perf_event.h
+@@ -1184,7 +1184,7 @@ static inline bool perf_paranoid_kernel(void)
+ extern void perf_tp_event(u16 event_type, u64 count, void *record,
+ 			  int entry_size, struct pt_regs *regs,
+ 			  struct hlist_head *head, int rctx,
+-			  struct task_struct *task, struct perf_event *event);
++			  struct task_struct *task);
+ extern void perf_bp_event(struct perf_event *event, void *data);
+ 
+ #ifndef perf_misc_flags
+diff --git a/include/linux/trace_events.h b/include/linux/trace_events.h
+index 2bcb4dc..975a11f 100644
+--- a/include/linux/trace_events.h
++++ b/include/linux/trace_events.h
+@@ -508,9 +508,9 @@ void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
+ static inline void
+ perf_trace_buf_submit(void *raw_data, int size, int rctx, u16 type,
+ 		       u64 count, struct pt_regs *regs, void *head,
+-		       struct task_struct *task, struct perf_event *event)
++		       struct task_struct *task)
+ {
+-	perf_tp_event(type, count, raw_data, size, regs, head, rctx, task, event);
++	perf_tp_event(type, count, raw_data, size, regs, head, rctx, task);
+ }
+ #endif
+ 
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index 7c394dd..48341e8 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -8001,15 +8001,16 @@ void perf_trace_run_bpf_submit(void *raw_data, int size, int rctx,
+ 		}
+ 	}
+ 	perf_tp_event(call->event.type, count, raw_data, size, regs, head,
+-		      rctx, task, NULL);
++		      rctx, task);
+ }
+ EXPORT_SYMBOL_GPL(perf_trace_run_bpf_submit);
+ 
+ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
+ 		   struct pt_regs *regs, struct hlist_head *head, int rctx,
+-		   struct task_struct *task, struct perf_event *event)
++		   struct task_struct *task)
+ {
+ 	struct perf_sample_data data;
++	struct perf_event *event;
+ 
+ 	struct perf_raw_record raw = {
+ 		.frag = {
+@@ -8023,15 +8024,9 @@ void perf_tp_event(u16 event_type, u64 count, void *record, int entry_size,
+ 
+ 	perf_trace_buf_update(record, event_type);
+ 
+-	/* Use the given event instead of the hlist */
+-	if (event) {
++	hlist_for_each_entry_rcu(event, head, hlist_entry) {
+ 		if (perf_tp_event_match(event, &data, regs))
+ 			perf_swevent_event(event, count, &data, regs);
+-	} else {
+-		hlist_for_each_entry_rcu(event, head, hlist_entry) {
+-			if (perf_tp_event_match(event, &data, regs))
+-				perf_swevent_event(event, count, &data, regs);
+-		}
+ 	}
+ 
+ 	/*
+diff --git a/kernel/trace/trace_event_perf.c b/kernel/trace/trace_event_perf.c
+index 13ba2d3..562fa69 100644
+--- a/kernel/trace/trace_event_perf.c
++++ b/kernel/trace/trace_event_perf.c
+@@ -306,7 +306,6 @@ void perf_trace_buf_update(void *record, u16 type)
+ perf_ftrace_function_call(unsigned long ip, unsigned long parent_ip,
+ 			  struct ftrace_ops *ops, struct pt_regs *pt_regs)
+ {
+-	struct perf_event *event;
+ 	struct ftrace_entry *entry;
+ 	struct hlist_head *head;
+ 	struct pt_regs regs;
+@@ -330,9 +329,8 @@ void perf_trace_buf_update(void *record, u16 type)
+ 
+ 	entry->ip = ip;
+ 	entry->parent_ip = parent_ip;
+-	event = container_of(ops, struct perf_event, ftrace_ops);
+ 	perf_trace_buf_submit(entry, ENTRY_SIZE, rctx, TRACE_FN,
+-			      1, &regs, head, NULL, event);
++			      1, &regs, head, NULL);
+ 
+ #undef ENTRY_SIZE
+ }
+diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c
+index 3c40d41..dd119eba 100644
+--- a/kernel/trace/trace_kprobe.c
++++ b/kernel/trace/trace_kprobe.c
+@@ -1211,7 +1211,7 @@ static int kretprobe_event_define_fields(struct trace_event_call *event_call)
+ 	memset(&entry[1], 0, dsize);
+ 	store_trace_args(sizeof(*entry), &tk->tp, regs, (u8 *)&entry[1], dsize);
+ 	perf_trace_buf_submit(entry, size, rctx, call->event.type, 1, regs,
+-			      head, NULL, NULL);
++			      head, NULL);
+ }
+ NOKPROBE_SYMBOL(kprobe_perf_func);
+ 
+@@ -1247,7 +1247,7 @@ static int kretprobe_event_define_fields(struct trace_event_call *event_call)
+ 	entry->ret_ip = (unsigned long)ri->ret_addr;
+ 	store_trace_args(sizeof(*entry), &tk->tp, regs, (u8 *)&entry[1], dsize);
+ 	perf_trace_buf_submit(entry, size, rctx, call->event.type, 1, regs,
+-			      head, NULL, NULL);
++			      head, NULL);
+ }
+ NOKPROBE_SYMBOL(kretprobe_perf_func);
+ #endif	/* CONFIG_PERF_EVENTS */
+diff --git a/kernel/trace/trace_syscalls.c b/kernel/trace/trace_syscalls.c
+index a2a642f..a3b02ba 100644
+--- a/kernel/trace/trace_syscalls.c
++++ b/kernel/trace/trace_syscalls.c
+@@ -623,7 +623,7 @@ static void perf_syscall_enter(void *ignore, struct pt_regs *regs, long id)
+ 
+ 	perf_trace_buf_submit(rec, size, rctx,
+ 			      sys_data->enter_event->event.type, 1, regs,
+-			      head, NULL, NULL);
++			      head, NULL);
+ }
+ 
+ static int perf_sysenter_enable(struct trace_event_call *call)
+@@ -717,7 +717,7 @@ static void perf_syscall_exit(void *ignore, struct pt_regs *regs, long ret)
+ 	}
+ 
+ 	perf_trace_buf_submit(rec, size, rctx, sys_data->exit_event->event.type,
+-			      1, regs, head, NULL, NULL);
++			      1, regs, head, NULL);
+ }
+ 
+ static int perf_sysexit_enable(struct trace_event_call *call)
+diff --git a/kernel/trace/trace_uprobe.c b/kernel/trace/trace_uprobe.c
+index 2db5a19..20b1e18 100644
+--- a/kernel/trace/trace_uprobe.c
++++ b/kernel/trace/trace_uprobe.c
+@@ -1154,7 +1154,7 @@ static void __uprobe_perf_func(struct trace_uprobe *tu,
+ 	}
+ 
+ 	perf_trace_buf_submit(entry, size, rctx, call->event.type, 1, regs,
+-			      head, NULL, NULL);
++			      head, NULL);
+  out:
+ 	preempt_enable();
+ }
+-- 
+1.9.1
+

@@ -1,0 +1,75 @@
+From 7d7e4cb90f7b1e06c3bd4e8a0504b3928b1f9540 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 17:06:28 +0200
+Subject: [PATCH 005/137] genirq: ipipe: protect generic chip against domain
+ preemption
+
+As described in Documentation/ipipe.rst, irq_chip drivers need to be
+specifically adapted for dealing with interrupt pipelining safely.
+
+The basic issue to address is proper serialization between some
+irq_chip handlers which may be called from out-of-band context
+immediately upon receipt of an IRQ, and the rest of the driver which
+may access the same data / IO registers from the regular - in-band -
+context on the same CPU.
+
+This commit converts the generic irq_chip lock to a hard spinlock,
+which ensures such serialization.
+---
+ include/linux/irq.h | 26 ++++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/irq.h b/include/linux/irq.h
+index 7d9427a..11d8fc0 100644
+--- a/include/linux/irq.h
++++ b/include/linux/irq.h
+@@ -972,7 +972,11 @@ struct irq_chip_type {
+  * different flow mechanisms (level/edge) for it.
+  */
+ struct irq_chip_generic {
++#ifdef CONFIG_IPIPE
++	ipipe_spinlock_t	lock;
++#else
+ 	raw_spinlock_t		lock;
++#endif
+ 	void __iomem		*reg_base;
+ 	u32			(*reg_readl)(void __iomem *addr);
+ 	void			(*reg_writel)(u32 val, void __iomem *addr);
+@@ -1100,18 +1104,28 @@ static inline struct irq_chip_type *irq_data_get_chip_type(struct irq_data *d)
+ #define IRQ_MSK(n) (u32)((n) < 32 ? ((1 << (n)) - 1) : UINT_MAX)
+ 
+ #ifdef CONFIG_SMP
+-static inline void irq_gc_lock(struct irq_chip_generic *gc)
++static inline unsigned long irq_gc_lock(struct irq_chip_generic *gc)
+ {
+-	raw_spin_lock(&gc->lock);
++	unsigned long flags = 0;
++	raw_spin_lock_irqsave_cond(&gc->lock, flags);
++	return flags;
+ }
+ 
+-static inline void irq_gc_unlock(struct irq_chip_generic *gc)
++static inline void 
++irq_gc_unlock(struct irq_chip_generic *gc, unsigned long flags)
+ {
+-	raw_spin_unlock(&gc->lock);
++	raw_spin_unlock_irqrestore_cond(&gc->lock, flags);
+ }
+ #else
+-static inline void irq_gc_lock(struct irq_chip_generic *gc) { }
+-static inline void irq_gc_unlock(struct irq_chip_generic *gc) { }
++static inline unsigned long irq_gc_lock(struct irq_chip_generic *gc) 
++{ 
++	return hard_cond_local_irq_save();
++}
++static inline void 
++irq_gc_unlock(struct irq_chip_generic *gc, unsigned long flags) 
++{ 
++	hard_cond_local_irq_restore(flags);
++}
+ #endif
+ 
+ /*
+-- 
+1.9.1
+

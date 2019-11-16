@@ -1,0 +1,24 @@
+From e9c3c1e37843738876a61d521c1538380d98f35d Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:20:01 +0100
+Subject: [PATCH 079/137] drivers/dove: pmu: ipipe: fix build
+
+---
+ drivers/soc/dove/pmu.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/soc/dove/pmu.c b/drivers/soc/dove/pmu.c
+index a51095f..f5790ab 100644
+--- a/drivers/soc/dove/pmu.c
++++ b/drivers/soc/dove/pmu.c
+@@ -16,6 +16,7 @@
+ #include <linux/slab.h>
+ #include <linux/soc/dove/pmu.h>
+ #include <linux/spinlock.h>
++#include <linux/ipipe.h>
+ 
+ #define NR_PMU_IRQS		7
+ 
+-- 
+1.9.1
+

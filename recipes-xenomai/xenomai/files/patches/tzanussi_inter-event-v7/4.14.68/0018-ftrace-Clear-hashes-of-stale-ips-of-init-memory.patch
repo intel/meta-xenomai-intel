@@ -1,0 +1,166 @@
+From b4bce5058cb3ad0d759bccb902953cf2a91f2fca Mon Sep 17 00:00:00 2001
+From: Joel Fernandes <joelaf@google.com>
+Date: Mon, 9 Oct 2017 12:29:31 -0700
+Subject: [PATCH 18/66] ftrace: Clear hashes of stale ips of init memory
+
+Filters should be cleared of init functions during freeing of init
+memory when the ftrace dyn records are released. However in current
+code, the filters are left as is. This patch clears the hashes of the
+saved init functions when the init memory is freed. This fixes the
+following issue reproducible with the following sequence of commands for
+a test module:
+================================================
+
+void bar(void)
+{
+    printk(KERN_INFO "bar!\n");
+}
+
+void foo(void)
+{
+    printk(KERN_INFO "foo!\n");
+    bar();
+}
+
+static int __init hello_init(void)
+{
+    printk(KERN_INFO "Hello world!\n");
+    foo();
+    return 0;
+}
+
+static void __exit hello_cleanup(void)
+{
+    printk(KERN_INFO "Cleaning up module.\n");
+}
+
+module_init(hello_init);
+module_exit(hello_cleanup);
+================================================
+
+Commands:
+echo '*:mod:test' > /d/tracing/set_ftrace_filter
+echo function > /d/tracing/current_tracer
+modprobe test
+rmmod test
+sleep 1
+modprobe test
+cat /d/tracing/set_ftrace_filter
+
+Behavior without patch: Init function is still in the filter
+Expected behavior: Shouldn't have any of the filters set
+
+Link: http://lkml.kernel.org/r/20171009192931.56401-1-joelaf@google.com
+
+Signed-off-by: Joel Fernandes <joelaf@google.com>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ kernel/trace/ftrace.c | 69 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 69 insertions(+)
+
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index d64f548..d083120 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -6063,6 +6063,63 @@ static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
+ }
+ #endif /* CONFIG_MODULES */
+ 
++struct ftrace_init_func {
++	struct list_head list;
++	unsigned long ip;
++};
++
++/* Clear any init ips from hashes */
++static void
++clear_func_from_hash(struct ftrace_init_func *func, struct ftrace_hash *hash)
++{
++	struct ftrace_func_entry *entry;
++
++	if (ftrace_hash_empty(hash))
++		return;
++
++	entry = __ftrace_lookup_ip(hash, func->ip);
++
++	/*
++	 * Do not allow this rec to match again.
++	 * Yeah, it may waste some memory, but will be removed
++	 * if/when the hash is modified again.
++	 */
++	if (entry)
++		entry->ip = 0;
++}
++
++static void
++clear_func_from_hashes(struct ftrace_init_func *func)
++{
++	struct trace_array *tr;
++
++	mutex_lock(&trace_types_lock);
++	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
++		if (!tr->ops || !tr->ops->func_hash)
++			continue;
++		mutex_lock(&tr->ops->func_hash->regex_lock);
++		clear_func_from_hash(func, tr->ops->func_hash->filter_hash);
++		clear_func_from_hash(func, tr->ops->func_hash->notrace_hash);
++		mutex_unlock(&tr->ops->func_hash->regex_lock);
++	}
++	mutex_unlock(&trace_types_lock);
++}
++
++static void add_to_clear_hash_list(struct list_head *clear_list,
++				   struct dyn_ftrace *rec)
++{
++	struct ftrace_init_func *func;
++
++	func = kmalloc(sizeof(*func), GFP_KERNEL);
++	if (!func) {
++		WARN_ONCE(1, "alloc failure, ftrace filter could be stale\n");
++		return;
++	}
++
++	func->ip = rec->ip;
++	list_add(&func->list, clear_list);
++}
++
+ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
+ {
+ 	unsigned long start = (unsigned long)(start_ptr);
+@@ -6072,8 +6129,12 @@ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
+ 	struct dyn_ftrace *rec;
+ 	struct dyn_ftrace key;
+ 	struct ftrace_mod_map *mod_map = NULL;
++	struct ftrace_init_func *func, *func_next;
++	struct list_head clear_hash;
+ 	int order;
+ 
++	INIT_LIST_HEAD(&clear_hash);
++
+ 	key.ip = start;
+ 	key.flags = end;	/* overload flags, as it is unsigned long */
+ 
+@@ -6098,6 +6159,9 @@ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
+ 		if (!rec)
+ 			continue;
+ 
++		/* rec will be cleared from hashes after ftrace_lock unlock */
++		add_to_clear_hash_list(&clear_hash, rec);
++
+ 		if (mod_map)
+ 			save_ftrace_mod_rec(mod_map, rec);
+ 
+@@ -6119,6 +6183,11 @@ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
+ 		goto again;
+ 	}
+ 	mutex_unlock(&ftrace_lock);
++
++	list_for_each_entry_safe(func, func_next, &clear_hash, list) {
++		clear_func_from_hashes(func);
++		kfree(func);
++	}
+ }
+ 
+ void __init ftrace_free_init_mem(void)
+-- 
+1.9.1
+

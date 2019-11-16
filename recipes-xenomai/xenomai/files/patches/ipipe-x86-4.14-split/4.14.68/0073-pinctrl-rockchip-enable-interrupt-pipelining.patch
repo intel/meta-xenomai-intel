@@ -1,0 +1,54 @@
+From 0f77538b6e299348c51389d34ca93b2119481693 Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:19:33 +0100
+Subject: [PATCH 073/137] pinctrl: rockchip: enable interrupt pipelining
+
+Fix up the pin controller driver of the Rockchip SoC in order to
+channel interrupts through the interrupt pipeline.
+---
+ drivers/pinctrl/pinctrl-rockchip.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/pinctrl/pinctrl-rockchip.c b/drivers/pinctrl/pinctrl-rockchip.c
+index a9bc1e0..7ffeea0 100644
+--- a/drivers/pinctrl/pinctrl-rockchip.c
++++ b/drivers/pinctrl/pinctrl-rockchip.c
+@@ -2637,7 +2637,7 @@ static int rockchip_irq_set_type(struct irq_data *d, unsigned int type)
+ 	u32 polarity;
+ 	u32 level;
+ 	u32 data;
+-	unsigned long flags;
++	unsigned long flags, flags2;
+ 	int ret;
+ 
+ 	/* make sure the pin is configured as gpio input */
+@@ -2660,7 +2660,7 @@ static int rockchip_irq_set_type(struct irq_data *d, unsigned int type)
+ 		irq_set_handler_locked(d, handle_level_irq);
+ 
+ 	raw_spin_lock_irqsave(&bank->slock, flags);
+-	irq_gc_lock(gc);
++	flags2 = irq_gc_lock(gc);
+ 
+ 	level = readl_relaxed(gc->reg_base + GPIO_INTTYPE_LEVEL);
+ 	polarity = readl_relaxed(gc->reg_base + GPIO_INT_POLARITY);
+@@ -2701,7 +2701,7 @@ static int rockchip_irq_set_type(struct irq_data *d, unsigned int type)
+ 		polarity &= ~mask;
+ 		break;
+ 	default:
+-		irq_gc_unlock(gc);
++		irq_gc_unlock(gc, flags2);
+ 		raw_spin_unlock_irqrestore(&bank->slock, flags);
+ 		clk_disable(bank->clk);
+ 		return -EINVAL;
+@@ -2710,7 +2710,7 @@ static int rockchip_irq_set_type(struct irq_data *d, unsigned int type)
+ 	writel_relaxed(level, gc->reg_base + GPIO_INTTYPE_LEVEL);
+ 	writel_relaxed(polarity, gc->reg_base + GPIO_INT_POLARITY);
+ 
+-	irq_gc_unlock(gc);
++	irq_gc_unlock(gc, flags2);
+ 	raw_spin_unlock_irqrestore(&bank->slock, flags);
+ 	clk_disable(bank->clk);
+ 
+-- 
+1.9.1
+

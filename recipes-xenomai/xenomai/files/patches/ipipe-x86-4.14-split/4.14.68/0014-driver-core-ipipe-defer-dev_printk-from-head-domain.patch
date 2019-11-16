@@ -1,0 +1,41 @@
+From f99272096bc38a625400e56dd1579c6dd8694379 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:32:03 +0200
+Subject: [PATCH 014/137] driver core: ipipe: defer dev_printk() from head
+ domain
+
+Just like printk(), dev_printk() cannot run from the head domain
+and/or with hard IRQs disabled. In such a case, log the output
+directly into the staging buffer we use for printk().
+
+NOTE: when redirected to the buffer, the output does not include the
+dev_printk() header text but is merely sent as-is to the log.
+---
+ drivers/base/core.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/drivers/base/core.c b/drivers/base/core.c
+index b054cb2..ec2153f 100644
+--- a/drivers/base/core.c
++++ b/drivers/base/core.c
+@@ -2935,6 +2935,17 @@ int dev_printk_emit(int level, const struct device *dev, const char *fmt, ...)
+ static void __dev_printk(const char *level, const struct device *dev,
+ 			struct va_format *vaf)
+ {
++#ifdef CONFIG_IPIPE
++	/*
++	 * Console logging only if hard locked, or over the head
++	 * stage.
++	 */
++	if (hard_irqs_disabled() || !ipipe_root_p) {
++		__ipipe_log_printk(vaf->fmt, *vaf->va);
++		return;
++	}
++#endif
++	    
+ 	if (dev)
+ 		dev_printk_emit(level[1] - '0', dev, "%s %s: %pV",
+ 				dev_driver_string(dev), dev_name(dev), vaf);
+-- 
+1.9.1
+

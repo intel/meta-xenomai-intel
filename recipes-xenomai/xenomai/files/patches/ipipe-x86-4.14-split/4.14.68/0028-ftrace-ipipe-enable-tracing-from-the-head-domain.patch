@@ -1,0 +1,385 @@
+From a6588b56b0b2cefd360a088f1a5a49ecd231b4a2 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 12:06:54 +0100
+Subject: [PATCH 028/137] ftrace: ipipe: enable tracing from the head domain
+
+Enabling ftrace for a co-kernel running in the head domain of a
+pipelined interrupt context means to:
+
+- make sure that ftrace's live kernel code patching still runs
+  unpreempted by any head domain activity (so that the latter can't
+  tread on invalid or half-baked changes in the .text section).
+
+- allow the co-kernel code running in the head domain to traverse
+  ftrace's tracepoints safely.
+
+The changes introduced by this commit ensure this by fixing up some
+key critical sections so that interrupts are still disabled in the
+CPU, undoing the interrupt flag virtualization in those particular
+cases.
+---
+ include/linux/ftrace.h               | 30 ++++++++++++++------------
+ kernel/trace/Kconfig                 |  1 +
+ kernel/trace/ftrace.c                | 41 +++++++++++++++++++++++++++++++-----
+ kernel/trace/ring_buffer.c           | 17 ++++++++++++---
+ kernel/trace/trace.c                 |  6 +++---
+ kernel/trace/trace_clock.c           |  4 ++--
+ kernel/trace/trace_functions.c       |  4 ++--
+ kernel/trace/trace_functions_graph.c |  8 +++----
+ kernel/trace/trace_irqsoff.c         |  8 +++----
+ 9 files changed, 82 insertions(+), 37 deletions(-)
+
+diff --git a/include/linux/ftrace.h b/include/linux/ftrace.h
+index 2bab819..2c9725b 100644
+--- a/include/linux/ftrace.h
++++ b/include/linux/ftrace.h
+@@ -146,20 +146,22 @@ typedef void (*ftrace_func_t)(unsigned long ip, unsigned long parent_ip,
+ enum {
+ 	FTRACE_OPS_FL_ENABLED			= 1 << 0,
+ 	FTRACE_OPS_FL_DYNAMIC			= 1 << 1,
+-	FTRACE_OPS_FL_SAVE_REGS			= 1 << 2,
+-	FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED	= 1 << 3,
+-	FTRACE_OPS_FL_RECURSION_SAFE		= 1 << 4,
+-	FTRACE_OPS_FL_STUB			= 1 << 5,
+-	FTRACE_OPS_FL_INITIALIZED		= 1 << 6,
+-	FTRACE_OPS_FL_DELETED			= 1 << 7,
+-	FTRACE_OPS_FL_ADDING			= 1 << 8,
+-	FTRACE_OPS_FL_REMOVING			= 1 << 9,
+-	FTRACE_OPS_FL_MODIFYING			= 1 << 10,
+-	FTRACE_OPS_FL_ALLOC_TRAMP		= 1 << 11,
+-	FTRACE_OPS_FL_IPMODIFY			= 1 << 12,
+-	FTRACE_OPS_FL_PID			= 1 << 13,
+-	FTRACE_OPS_FL_RCU			= 1 << 14,
+-	FTRACE_OPS_FL_TRACE_ARRAY		= 1 << 15,
++	FTRACE_OPS_FL_PER_CPU			= 1 << 2,
++	FTRACE_OPS_FL_SAVE_REGS			= 1 << 3,
++	FTRACE_OPS_FL_SAVE_REGS_IF_SUPPORTED	= 1 << 4,
++	FTRACE_OPS_FL_RECURSION_SAFE		= 1 << 5,
++	FTRACE_OPS_FL_STUB			= 1 << 6,
++	FTRACE_OPS_FL_INITIALIZED		= 1 << 7,
++	FTRACE_OPS_FL_DELETED			= 1 << 8,
++	FTRACE_OPS_FL_ADDING			= 1 << 9,
++	FTRACE_OPS_FL_REMOVING			= 1 << 10,
++	FTRACE_OPS_FL_MODIFYING			= 1 << 11,
++	FTRACE_OPS_FL_ALLOC_TRAMP		= 1 << 12,
++	FTRACE_OPS_FL_IPMODIFY			= 1 << 13,
++	FTRACE_OPS_FL_PID			= 1 << 14,
++	FTRACE_OPS_FL_RCU			= 1 << 15,
++	FTRACE_OPS_FL_TRACE_ARRAY		= 1 << 16,
++	FTRACE_OPS_FL_IPIPE_EXCLUSIVE		= 1 << 17,
+ };
+ 
+ #ifdef CONFIG_DYNAMIC_FTRACE
+diff --git a/kernel/trace/Kconfig b/kernel/trace/Kconfig
+index 53abe81..a01634e 100644
+--- a/kernel/trace/Kconfig
++++ b/kernel/trace/Kconfig
+@@ -491,6 +491,7 @@ config DYNAMIC_FTRACE
+ 	bool "enable/disable function tracing dynamically"
+ 	depends on FUNCTION_TRACER
+ 	depends on HAVE_DYNAMIC_FTRACE
++	depends on !IPIPE
+ 	default y
+ 	help
+ 	  This option will modify all the calls to function tracing
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index e188085..fbacf38 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -33,6 +33,7 @@
+ #include <linux/list.h>
+ #include <linux/hash.h>
+ #include <linux/rcupdate.h>
++#include <linux/ipipe.h>
+ 
+ #include <trace/events/sched.h>
+ 
+@@ -247,8 +248,17 @@ static ftrace_func_t ftrace_ops_get_list_func(struct ftrace_ops *ops)
+ 
+ static void update_ftrace_function(void)
+ {
++	struct ftrace_ops *ops;
+ 	ftrace_func_t func;
+ 
++	for (ops = ftrace_ops_list;
++	     ops != &ftrace_list_end; ops = ops->next)
++		if (ops->flags & FTRACE_OPS_FL_IPIPE_EXCLUSIVE) {
++			set_function_trace_op = ops;
++			func = ops->func;
++			goto set_pointers;
++		}
++
+ 	/*
+ 	 * Prepare the ftrace_ops that the arch callback will use.
+ 	 * If there's only one ftrace_ops registered, the ftrace_ops_list
+@@ -278,6 +288,7 @@ static void update_ftrace_function(void)
+ 
+ 	update_function_graph_func();
+ 
++  set_pointers:
+ 	/* If there's no change, then do nothing more here */
+ 	if (ftrace_trace_function == func)
+ 		return;
+@@ -2660,6 +2671,9 @@ void __weak arch_ftrace_update_code(int command)
+ 
+ static void ftrace_run_update_code(int command)
+ {
++#ifdef CONFIG_IPIPE
++	unsigned long flags;
++#endif /* CONFIG_IPIPE */
+ 	int ret;
+ 
+ 	ret = ftrace_arch_code_modify_prepare();
+@@ -2673,7 +2687,13 @@ static void ftrace_run_update_code(int command)
+ 	 * is safe. The stop_machine() is the safest, but also
+ 	 * produces the most overhead.
+ 	 */
++#ifdef CONFIG_IPIPE
++	flags = ipipe_critical_enter(NULL);
++	__ftrace_modify_code(&command);
++	ipipe_critical_exit(flags);
++#else  /* !CONFIG_IPIPE */
+ 	arch_ftrace_update_code(command);
++#endif /* !CONFIG_IPIPE */
+ 
+ 	ret = ftrace_arch_code_modify_post_process();
+ 	FTRACE_WARN_ON(ret);
+@@ -5623,10 +5643,10 @@ static int ftrace_process_locs(struct module *mod,
+ 	 * reason to cause large interrupt latencies while we do it.
+ 	 */
+ 	if (!mod)
+-		local_irq_save(flags);
++		flags = hard_local_irq_save();
+ 	ftrace_update_code(mod, start_pg);
+ 	if (!mod)
+-		local_irq_restore(flags);
++		hard_local_irq_restore(flags);
+ 	ret = 0;
+  out:
+ 	mutex_unlock(&ftrace_lock);
+@@ -6168,9 +6188,11 @@ void __init ftrace_init(void)
+ 	unsigned long count, flags;
+ 	int ret;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save_notrace();
+ 	ret = ftrace_dyn_arch_init();
+-	local_irq_restore(flags);
++	hard_local_irq_restore_notrace(flags);
++
++	/* ftrace_dyn_arch_init places the return code in addr */
+ 	if (ret)
+ 		goto failed;
+ 
+@@ -6323,7 +6345,16 @@ void ftrace_reset_array_ops(struct trace_array *tr)
+ 		}
+ 	} while_for_each_ftrace_op(op);
+ out:
+-	preempt_enable_notrace();
++#ifdef CONFIG_IPIPE
++	if (hard_irqs_disabled() || !__ipipe_root_p)
++		/*
++		 * Nothing urgent to schedule here. At latest the timer tick
++		 * will pick up whatever the tracing functions kicked off.
++		 */
++		preempt_enable_no_resched_notrace();
++	else
++#endif
++		preempt_enable_notrace();
+ 	trace_clear_recursion(bit);
+ }
+ 
+diff --git a/kernel/trace/ring_buffer.c b/kernel/trace/ring_buffer.c
+index 6fcc96e..c1329e9 100644
+--- a/kernel/trace/ring_buffer.c
++++ b/kernel/trace/ring_buffer.c
+@@ -2605,12 +2605,20 @@ static void rb_commit(struct ring_buffer_per_cpu *cpu_buffer,
+ static __always_inline int
+ trace_recursive_lock(struct ring_buffer_per_cpu *cpu_buffer)
+ {
+-	if (cpu_buffer->current_context >= 6)
++	unsigned long flags;
++	unsigned int val;
++
++	flags = hard_local_irq_save();
++
++	val = cpu_buffer->current_context;
++	if (val >= 6) {
++		hard_local_irq_restore(flags);
+ 		return 1;
++	}
+ 
+ 	cpu_buffer->current_context++;
+ 	/* Interrupts must see this update */
+-	barrier();
++	hard_local_irq_restore(flags);
+ 
+ 	return 0;
+ }
+@@ -2618,9 +2626,12 @@ static void rb_commit(struct ring_buffer_per_cpu *cpu_buffer,
+ static __always_inline void
+ trace_recursive_unlock(struct ring_buffer_per_cpu *cpu_buffer)
+ {
++	unsigned long flags;
++
++	flags = hard_local_irq_save();
+ 	/* Don't let the dec leak out */
+-	barrier();
+ 	cpu_buffer->current_context--;
++	hard_local_irq_restore(flags);
+ }
+ 
+ /**
+diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
+index 1137b0c..434a176 100644
+--- a/kernel/trace/trace.c
++++ b/kernel/trace/trace.c
+@@ -2924,8 +2924,9 @@ int trace_vbprintk(unsigned long ip, const char *fmt, va_list args)
+ 	/* Don't pollute graph traces with trace_vprintk internals */
+ 	pause_graph_tracing();
+ 
++	flags = hard_local_irq_save();
++
+ 	pc = preempt_count();
+-	preempt_disable_notrace();
+ 
+ 	tbuffer = get_trace_buf();
+ 	if (!tbuffer) {
+@@ -2938,7 +2939,6 @@ int trace_vbprintk(unsigned long ip, const char *fmt, va_list args)
+ 	if (len > TRACE_BUF_SIZE/sizeof(int) || len < 0)
+ 		goto out;
+ 
+-	local_save_flags(flags);
+ 	size = sizeof(*entry) + sizeof(u32) * len;
+ 	buffer = tr->trace_buffer.buffer;
+ 	event = __trace_buffer_lock_reserve(buffer, TRACE_BPRINT, size,
+@@ -2959,7 +2959,7 @@ int trace_vbprintk(unsigned long ip, const char *fmt, va_list args)
+ 	put_trace_buf();
+ 
+ out_nobuffer:
+-	preempt_enable_notrace();
++	hard_local_irq_restore(flags);
+ 	unpause_graph_tracing();
+ 
+ 	return len;
+diff --git a/kernel/trace/trace_clock.c b/kernel/trace/trace_clock.c
+index 5fdc779..e722b05 100644
+--- a/kernel/trace/trace_clock.c
++++ b/kernel/trace/trace_clock.c
+@@ -96,7 +96,7 @@ u64 notrace trace_clock_global(void)
+ 	int this_cpu;
+ 	u64 now;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save_notrace();
+ 
+ 	this_cpu = raw_smp_processor_id();
+ 	now = sched_clock_cpu(this_cpu);
+@@ -122,7 +122,7 @@ u64 notrace trace_clock_global(void)
+ 	arch_spin_unlock(&trace_clock_struct.lock);
+ 
+  out:
+-	local_irq_restore(flags);
++	hard_local_irq_restore_notrace(flags);
+ 
+ 	return now;
+ }
+diff --git a/kernel/trace/trace_functions.c b/kernel/trace/trace_functions.c
+index 27f7ad1..d1db7ae 100644
+--- a/kernel/trace/trace_functions.c
++++ b/kernel/trace/trace_functions.c
+@@ -172,7 +172,7 @@ static void function_trace_start(struct trace_array *tr)
+ 	 * Need to use raw, since this must be called before the
+ 	 * recursive protection is performed.
+ 	 */
+-	local_irq_save(flags);
++	flags = hard_local_irq_save();
+ 	cpu = raw_smp_processor_id();
+ 	data = per_cpu_ptr(tr->trace_buffer.data, cpu);
+ 	disabled = atomic_inc_return(&data->disabled);
+@@ -192,7 +192,7 @@ static void function_trace_start(struct trace_array *tr)
+ 	}
+ 
+ 	atomic_dec(&data->disabled);
+-	local_irq_restore(flags);
++	hard_local_irq_restore(flags);
+ }
+ 
+ static struct tracer_opt func_opts[] = {
+diff --git a/kernel/trace/trace_functions_graph.c b/kernel/trace/trace_functions_graph.c
+index 169b3c4..f01bf80 100644
+--- a/kernel/trace/trace_functions_graph.c
++++ b/kernel/trace/trace_functions_graph.c
+@@ -408,7 +408,7 @@ int trace_graph_entry(struct ftrace_graph_ent *trace)
+ 	if (tracing_thresh)
+ 		return 1;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save_notrace();
+ 	cpu = raw_smp_processor_id();
+ 	data = per_cpu_ptr(tr->trace_buffer.data, cpu);
+ 	disabled = atomic_inc_return(&data->disabled);
+@@ -420,7 +420,7 @@ int trace_graph_entry(struct ftrace_graph_ent *trace)
+ 	}
+ 
+ 	atomic_dec(&data->disabled);
+-	local_irq_restore(flags);
++	hard_local_irq_restore_notrace(flags);
+ 
+ 	return ret;
+ }
+@@ -482,7 +482,7 @@ void trace_graph_return(struct ftrace_graph_ret *trace)
+ 	int cpu;
+ 	int pc;
+ 
+-	local_irq_save(flags);
++	flags = hard_local_irq_save_notrace();
+ 	cpu = raw_smp_processor_id();
+ 	data = per_cpu_ptr(tr->trace_buffer.data, cpu);
+ 	disabled = atomic_inc_return(&data->disabled);
+@@ -491,7 +491,7 @@ void trace_graph_return(struct ftrace_graph_ret *trace)
+ 		__trace_graph_return(tr, trace, flags, pc);
+ 	}
+ 	atomic_dec(&data->disabled);
+-	local_irq_restore(flags);
++	hard_local_irq_restore_notrace(flags);
+ }
+ 
+ void set_graph_array(struct trace_array *tr)
+diff --git a/kernel/trace/trace_irqsoff.c b/kernel/trace/trace_irqsoff.c
+index 03ecb44..4f0e324 100644
+--- a/kernel/trace/trace_irqsoff.c
++++ b/kernel/trace/trace_irqsoff.c
+@@ -471,25 +471,25 @@ void time_hardirqs_off(unsigned long a0, unsigned long a1)
+  */
+ static inline void tracer_hardirqs_on(void)
+ {
+-	if (!preempt_trace() && irq_trace())
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		stop_critical_timing(CALLER_ADDR0, CALLER_ADDR1);
+ }
+ 
+ static inline void tracer_hardirqs_off(void)
+ {
+-	if (!preempt_trace() && irq_trace())
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		start_critical_timing(CALLER_ADDR0, CALLER_ADDR1);
+ }
+ 
+ static inline void tracer_hardirqs_on_caller(unsigned long caller_addr)
+ {
+-	if (!preempt_trace() && irq_trace())
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		stop_critical_timing(CALLER_ADDR0, caller_addr);
+ }
+ 
+ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr)
+ {
+-	if (!preempt_trace() && irq_trace())
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
+ 		start_critical_timing(CALLER_ADDR0, caller_addr);
+ }
+ 
+-- 
+1.9.1
+

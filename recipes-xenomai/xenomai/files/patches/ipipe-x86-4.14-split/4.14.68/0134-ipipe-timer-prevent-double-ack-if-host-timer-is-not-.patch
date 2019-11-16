@@ -1,0 +1,39 @@
+From 308f65ab9016e9c475ce3279f4da4e157a1a7ec5 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 28 Sep 2018 14:45:41 +0200
+Subject: [PATCH 134/137] ipipe: timer: prevent double-ack if host timer is not
+ grabbed
+
+Only timers stolen away from the host kernel should be early acked by
+the pipeline core. Otherwise, the regular IRQ handler associated to
+the timer would duplicate the action. The IRQ line is left masked,
+waiting for the IRQ flow handler to unmask it eventually.
+---
+ kernel/ipipe/timer.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/ipipe/timer.c b/kernel/ipipe/timer.c
+index 96989a5..b3b3906 100644
+--- a/kernel/ipipe/timer.c
++++ b/kernel/ipipe/timer.c
+@@ -354,10 +354,13 @@ static void __ipipe_ack_hrtimer_irq(struct irq_desc *desc)
+ 
+ 	if (desc)
+ 		desc->ipipe_ack(desc);
+-	if (timer->ack)
+-		timer->ack();
+-	if (desc)
+-		desc->ipipe_end(desc);
++
++	if (timer->host_timer->ipipe_stolen) {
++		if (timer->ack)
++			timer->ack();
++		if (desc)
++			desc->ipipe_end(desc);
++	}
+ }
+ 
+ static int do_set_oneshot(struct clock_event_device *cdev)
+-- 
+1.9.1
+

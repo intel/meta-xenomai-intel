@@ -1,0 +1,94 @@
+From dedcf8acd60c6d93a9d123803e2b00308e87ad62 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 11:56:11 +0200
+Subject: [PATCH 006/137] preempt: ipipe: : add preemption-safe
+ hard_preempt_{enable, disable}() ops
+
+Some inner code of the interrupt pipeline may have to traverse regular
+kernel code which manipulates the preemption count, expecting full
+serialization including with out-of-band contexts.
+
+The hard_preempt_*() variants are substituted to the original
+preempt_{enable, disable}() calls in these cases.
+---
+ include/linux/ipipe_base.h | 13 +++++++++++++
+ include/linux/preempt.h    | 25 +++++++++++++++++++++++--
+ 2 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/ipipe_base.h b/include/linux/ipipe_base.h
+index d3d1078..fb6a51f 100644
+--- a/include/linux/ipipe_base.h
++++ b/include/linux/ipipe_base.h
+@@ -100,6 +100,9 @@ static inline void __ipipe_sync_stage(void)
+ int __ipipe_log_printk(const char *fmt, va_list args);
+ void __ipipe_flush_printk(unsigned int irq, void *cookie);
+ 
++#define __ipipe_get_cpu(flags)	({ (flags) = hard_preempt_disable(); ipipe_processor_id(); })
++#define __ipipe_put_cpu(flags)	hard_preempt_enable(flags)
++
+ #define __ipipe_serial_debug(__fmt, __args...)	raw_printk(__fmt, ##__args)
+ 
+ #else /* !CONFIG_IPIPE */
+@@ -115,6 +118,16 @@ static inline void __ipipe_init_proc(void) { }
+ 
+ static inline void __ipipe_idle(void) { }
+ 
++#define hard_preempt_disable()		({ preempt_disable(); 0; })
++#define hard_preempt_enable(flags)	({ preempt_enable(); (void)(flags); })
++
++#define __ipipe_get_cpu(flags)		({ (void)(flags); get_cpu(); })
++#define __ipipe_put_cpu(flags)		\
++	do {				\
++		(void)(flags);		\
++		put_cpu();		\
++	} while (0)
++
+ #define __ipipe_root_tick_p(regs)	1
+ 
+ #define ipipe_handle_domain_irq(__domain, __hwirq, __regs)	\
+diff --git a/include/linux/preempt.h b/include/linux/preempt.h
+index 5bd3f15..5590141 100644
+--- a/include/linux/preempt.h
++++ b/include/linux/preempt.h
+@@ -255,7 +255,28 @@
+ 
+ #endif /* CONFIG_PREEMPT_COUNT */
+ 
+-#ifdef MODULE
++#ifdef CONFIG_IPIPE
++#define hard_preempt_disable()				\
++	({						\
++		unsigned long __flags__;		\
++		__flags__ = hard_local_irq_save();	\
++		if (__ipipe_root_p)			\
++			preempt_disable();		\
++		__flags__;				\
++	})
++
++#define hard_preempt_enable(__flags__)					\
++	do {								\
++		if (__ipipe_root_p) {					\
++			preempt_enable_no_resched();			\
++			hard_local_irq_restore(__flags__);		\
++			if (!hard_irqs_disabled_flags(__flags__))	\
++				preempt_check_resched();		\
++		} else							\
++			hard_local_irq_restore(__flags__);		\
++	} while (0)
++
++#elif defined(MODULE)
+ /*
+  * Modules have no business playing preemption tricks.
+  */
+@@ -263,7 +284,7 @@
+ #undef preempt_enable_no_resched
+ #undef preempt_enable_no_resched_notrace
+ #undef preempt_check_resched
+-#endif
++#endif	/* !IPIPE && MODULE */
+ 
+ #define preempt_set_need_resched() \
+ do { \
+-- 
+1.9.1
+

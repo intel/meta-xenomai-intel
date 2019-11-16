@@ -1,0 +1,903 @@
+From 96db64544fc5866d902f408da81b13c75257d36d Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 11:57:56 +0100
+Subject: [PATCH 002/137] locking: ipipe: add hard lock alternative to regular
+ spinlocks
+
+Hard spinlocks manipulate the CPU interrupt mask, without affecting
+the kernel preemption state in locking/unlocking operations.
+
+This type of spinlock is useful for implementing a critical section to
+serialize concurrent accesses from both in-band and out-of-band
+contexts, i.e. from root and head stages.
+
+Hard spinlocks exclusively depend on the pre-existing arch-specific
+bits which implement regular spinlocks. They can be seen as basic
+spinlocks still affecting the CPU's interrupt state when all other
+spinlock types only deal with the virtual interrupt flag managed by
+the pipeline core - i.e. only disable interrupts for the regular
+in-band kernel activity.
+---
+ include/linux/ipipe_lock.h       | 329 +++++++++++++++++++++++++++++++++++++++
+ include/linux/rwlock.h           |   8 +-
+ include/linux/rwlock_api_smp.h   |   4 +-
+ include/linux/spinlock.h         |  90 ++++++-----
+ include/linux/spinlock_api_smp.h |   6 +-
+ include/linux/spinlock_up.h      |  17 +-
+ kernel/ipipe/core.c              | 103 ++++++++++++
+ kernel/locking/lockdep.c         |  18 ++-
+ kernel/locking/spinlock.c        |   4 +-
+ lib/bust_spinlocks.c             |   2 +
+ 10 files changed, 512 insertions(+), 69 deletions(-)
+ create mode 100644 include/linux/ipipe_lock.h
+
+diff --git a/include/linux/ipipe_lock.h b/include/linux/ipipe_lock.h
+new file mode 100644
+index 0000000..da6188d
+--- /dev/null
++++ b/include/linux/ipipe_lock.h
+@@ -0,0 +1,329 @@
++/*   -*- linux-c -*-
++ *   include/linux/ipipe_lock.h
++ *
++ *   Copyright (C) 2009 Philippe Gerum.
++ *
++ *   This program is free software; you can redistribute it and/or modify
++ *   it under the terms of the GNU General Public License as published by
++ *   the Free Software Foundation, Inc., 675 Mass Ave, Cambridge MA 02139,
++ *   USA; either version 2 of the License, or (at your option) any later
++ *   version.
++ *
++ *   This program is distributed in the hope that it will be useful,
++ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *   GNU General Public License for more details.
++ *
++ *   You should have received a copy of the GNU General Public License
++ *   along with this program; if not, write to the Free Software
++ *   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
++ */
++
++#ifndef __LINUX_IPIPE_LOCK_H
++#define __LINUX_IPIPE_LOCK_H
++
++#include <asm-generic/ipipe.h>
++
++typedef struct {
++	arch_spinlock_t arch_lock;
++} __ipipe_spinlock_t;
++
++#define ipipe_spinlock(lock)	((__ipipe_spinlock_t *)(lock))
++#define ipipe_spinlock_p(lock)							\
++	__builtin_types_compatible_p(typeof(lock), __ipipe_spinlock_t *) ||	\
++	__builtin_types_compatible_p(typeof(lock), __ipipe_spinlock_t [])
++
++#define std_spinlock_raw(lock)	((raw_spinlock_t *)(lock))
++#define std_spinlock_raw_p(lock)					\
++	__builtin_types_compatible_p(typeof(lock), raw_spinlock_t *) ||	\
++	__builtin_types_compatible_p(typeof(lock), raw_spinlock_t [])
++
++#ifdef CONFIG_PREEMPT_RT_FULL
++
++#define PICK_SPINLOCK_IRQSAVE(lock, flags)				\
++	do {								\
++		if (ipipe_spinlock_p(lock))				\
++			(flags) = __ipipe_spin_lock_irqsave(ipipe_spinlock(lock)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__real_raw_spin_lock_irqsave(std_spinlock_raw(lock), flags); \
++		else __bad_lock_type();					\
++	} while (0)
++
++#define PICK_SPINTRYLOCK_IRQSAVE(lock, flags)				\
++	({								\
++		int __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = __ipipe_spin_trylock_irqsave(ipipe_spinlock(lock), &(flags)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irqsave(std_spinlock_raw(lock), flags); \
++		else __bad_lock_type();					\
++		__ret__;						\
++	 })
++
++#define PICK_SPINTRYLOCK_IRQ(lock)					\
++	({								\
++		int __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = __ipipe_spin_trylock_irq(ipipe_spinlock(lock)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irq(std_spinlock_raw(lock)); \
++		else __bad_lock_type();					\
++		__ret__;						\
++	 })
++
++#define PICK_SPINUNLOCK_IRQRESTORE(lock, flags)				\
++	do {								\
++		if (ipipe_spinlock_p(lock))				\
++			__ipipe_spin_unlock_irqrestore(ipipe_spinlock(lock), flags); \
++		else if (std_spinlock_raw_p(lock)) {			\
++			__ipipe_spin_unlock_debug(flags);		\
++			__real_raw_spin_unlock_irqrestore(std_spinlock_raw(lock), flags); \
++		} else __bad_lock_type();				\
++	} while (0)
++
++#define PICK_SPINOP(op, lock)						\
++	({								\
++		if (ipipe_spinlock_p(lock))				\
++			arch_spin##op(&ipipe_spinlock(lock)->arch_lock); \
++		else if (std_spinlock_raw_p(lock))			\
++			__real_raw_spin##op(std_spinlock_raw(lock));	\
++		else __bad_lock_type();					\
++		(void)0;						\
++	})
++
++#define PICK_SPINOP_RET(op, lock, type)					\
++	({								\
++		type __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = arch_spin##op(&ipipe_spinlock(lock)->arch_lock); \
++		else if (std_spinlock_raw_p(lock))			\
++			__ret__ = __real_raw_spin##op(std_spinlock_raw(lock)); \
++		else { __ret__ = -1; __bad_lock_type(); }		\
++		__ret__;						\
++	})
++
++#else /* !CONFIG_PREEMPT_RT_FULL */
++
++#define std_spinlock(lock)	((spinlock_t *)(lock))
++#define std_spinlock_p(lock)						\
++	__builtin_types_compatible_p(typeof(lock), spinlock_t *) ||	\
++	__builtin_types_compatible_p(typeof(lock), spinlock_t [])
++
++#define PICK_SPINLOCK_IRQSAVE(lock, flags)				\
++	do {								\
++		if (ipipe_spinlock_p(lock))				\
++			(flags) = __ipipe_spin_lock_irqsave(ipipe_spinlock(lock)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__real_raw_spin_lock_irqsave(std_spinlock_raw(lock), flags); \
++		else if (std_spinlock_p(lock))				\
++			__real_raw_spin_lock_irqsave(&std_spinlock(lock)->rlock, flags); \
++		else __bad_lock_type();					\
++	} while (0)
++
++#define PICK_SPINTRYLOCK_IRQSAVE(lock, flags)				\
++	({								\
++		int __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = __ipipe_spin_trylock_irqsave(ipipe_spinlock(lock), &(flags)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irqsave(std_spinlock_raw(lock), flags); \
++		else if (std_spinlock_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irqsave(&std_spinlock(lock)->rlock, flags); \
++		else __bad_lock_type();					\
++		__ret__;						\
++	 })
++
++#define PICK_SPINTRYLOCK_IRQ(lock)					\
++	({								\
++		int __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = __ipipe_spin_trylock_irq(ipipe_spinlock(lock)); \
++		else if (std_spinlock_raw_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irq(std_spinlock_raw(lock)); \
++		else if (std_spinlock_p(lock))				\
++			__ret__ = __real_raw_spin_trylock_irq(&std_spinlock(lock)->rlock); \
++		else __bad_lock_type();					\
++		__ret__;						\
++	 })
++
++#define PICK_SPINUNLOCK_IRQRESTORE(lock, flags)				\
++	do {								\
++		if (ipipe_spinlock_p(lock))				\
++			__ipipe_spin_unlock_irqrestore(ipipe_spinlock(lock), flags); \
++		else {							\
++			__ipipe_spin_unlock_debug(flags);		\
++			if (std_spinlock_raw_p(lock))			\
++				__real_raw_spin_unlock_irqrestore(std_spinlock_raw(lock), flags); \
++			else if (std_spinlock_p(lock))			\
++				__real_raw_spin_unlock_irqrestore(&std_spinlock(lock)->rlock, flags); \
++		}							\
++	} while (0)
++
++#define PICK_SPINOP(op, lock)						\
++	({								\
++		if (ipipe_spinlock_p(lock))				\
++			arch_spin##op(&ipipe_spinlock(lock)->arch_lock); \
++		else if (std_spinlock_raw_p(lock))			\
++			__real_raw_spin##op(std_spinlock_raw(lock));	\
++		else if (std_spinlock_p(lock))				\
++			__real_raw_spin##op(&std_spinlock(lock)->rlock); \
++		else __bad_lock_type();					\
++		(void)0;						\
++	})
++
++#define PICK_SPINOP_RET(op, lock, type)					\
++	({								\
++		type __ret__;						\
++		if (ipipe_spinlock_p(lock))				\
++			__ret__ = arch_spin##op(&ipipe_spinlock(lock)->arch_lock); \
++		else if (std_spinlock_raw_p(lock))			\
++			__ret__ = __real_raw_spin##op(std_spinlock_raw(lock)); \
++		else if (std_spinlock_p(lock))				\
++			__ret__ = __real_raw_spin##op(&std_spinlock(lock)->rlock); \
++		else { __ret__ = -1; __bad_lock_type(); }		\
++		__ret__;						\
++	})
++
++#endif /* !CONFIG_PREEMPT_RT_FULL */
++
++#define arch_spin_lock_init(lock)					\
++	do {								\
++		IPIPE_DEFINE_SPINLOCK(__lock__);			\
++		*((ipipe_spinlock_t *)lock) = __lock__;			\
++	} while (0)
++
++#define arch_spin_lock_irq(lock)					\
++	do {								\
++		hard_local_irq_disable();				\
++		arch_spin_lock(lock);					\
++	} while (0)
++
++#define arch_spin_unlock_irq(lock)					\
++	do {								\
++		arch_spin_unlock(lock);					\
++		hard_local_irq_enable();				\
++	} while (0)
++
++typedef struct {
++	arch_rwlock_t arch_lock;
++} __ipipe_rwlock_t;
++
++#define ipipe_rwlock_p(lock)						\
++	__builtin_types_compatible_p(typeof(lock), __ipipe_rwlock_t *)
++
++#define std_rwlock_p(lock)						\
++	__builtin_types_compatible_p(typeof(lock), rwlock_t *)
++
++#define ipipe_rwlock(lock)	((__ipipe_rwlock_t *)(lock))
++#define std_rwlock(lock)	((rwlock_t *)(lock))
++
++#define PICK_RWOP(op, lock)						\
++	do {								\
++		if (ipipe_rwlock_p(lock))				\
++			arch##op(&ipipe_rwlock(lock)->arch_lock);	\
++		else if (std_rwlock_p(lock))				\
++			_raw##op(std_rwlock(lock));			\
++		else __bad_lock_type();					\
++	} while (0)
++
++extern int __bad_lock_type(void);
++
++#ifdef CONFIG_IPIPE
++
++#define ipipe_spinlock_t		__ipipe_spinlock_t
++#define IPIPE_DEFINE_RAW_SPINLOCK(x)	ipipe_spinlock_t x = IPIPE_SPIN_LOCK_UNLOCKED
++#define IPIPE_DECLARE_RAW_SPINLOCK(x)	extern ipipe_spinlock_t x
++#define IPIPE_DEFINE_SPINLOCK(x)	IPIPE_DEFINE_RAW_SPINLOCK(x)
++#define IPIPE_DECLARE_SPINLOCK(x)	IPIPE_DECLARE_RAW_SPINLOCK(x)
++
++#define IPIPE_SPIN_LOCK_UNLOCKED					\
++	(__ipipe_spinlock_t) {	.arch_lock = __ARCH_SPIN_LOCK_UNLOCKED }
++
++#define spin_lock_irqsave_cond(lock, flags) \
++	spin_lock_irqsave(lock, flags)
++
++#define spin_unlock_irqrestore_cond(lock, flags) \
++	spin_unlock_irqrestore(lock, flags)
++
++#define raw_spin_lock_irqsave_cond(lock, flags) \
++	raw_spin_lock_irqsave(lock, flags)
++
++#define raw_spin_unlock_irqrestore_cond(lock, flags) \
++	raw_spin_unlock_irqrestore(lock, flags)
++
++void __ipipe_spin_lock_irq(ipipe_spinlock_t *lock);
++
++int __ipipe_spin_trylock_irq(ipipe_spinlock_t *lock);
++
++void __ipipe_spin_unlock_irq(ipipe_spinlock_t *lock);
++
++unsigned long __ipipe_spin_lock_irqsave(ipipe_spinlock_t *lock);
++
++int __ipipe_spin_trylock_irqsave(ipipe_spinlock_t *lock,
++				 unsigned long *x);
++
++void __ipipe_spin_unlock_irqrestore(ipipe_spinlock_t *lock,
++				    unsigned long x);
++
++void __ipipe_spin_unlock_irqbegin(ipipe_spinlock_t *lock);
++
++void __ipipe_spin_unlock_irqcomplete(unsigned long x);
++
++#if defined(CONFIG_IPIPE_DEBUG_INTERNAL) && defined(CONFIG_SMP)
++void __ipipe_spin_unlock_debug(unsigned long flags);
++#else
++#define __ipipe_spin_unlock_debug(flags)  do { } while (0)
++#endif
++
++#define ipipe_rwlock_t			__ipipe_rwlock_t
++#define IPIPE_DEFINE_RWLOCK(x)		ipipe_rwlock_t x = IPIPE_RW_LOCK_UNLOCKED
++#define IPIPE_DECLARE_RWLOCK(x)		extern ipipe_rwlock_t x
++
++#define IPIPE_RW_LOCK_UNLOCKED	\
++	(__ipipe_rwlock_t) { .arch_lock = __ARCH_RW_LOCK_UNLOCKED }
++
++#else /* !CONFIG_IPIPE */
++
++#define ipipe_spinlock_t		spinlock_t
++#define IPIPE_DEFINE_SPINLOCK(x)	DEFINE_SPINLOCK(x)
++#define IPIPE_DECLARE_SPINLOCK(x)	extern spinlock_t x
++#define IPIPE_SPIN_LOCK_UNLOCKED	__SPIN_LOCK_UNLOCKED(unknown)
++#define IPIPE_DEFINE_RAW_SPINLOCK(x)	DEFINE_RAW_SPINLOCK(x)
++#define IPIPE_DECLARE_RAW_SPINLOCK(x)	extern raw_spinlock_t x
++
++#define spin_lock_irqsave_cond(lock, flags)		\
++	do {						\
++		(void)(flags);				\
++		spin_lock(lock);			\
++	} while(0)
++
++#define spin_unlock_irqrestore_cond(lock, flags)	\
++	spin_unlock(lock)
++
++#define raw_spin_lock_irqsave_cond(lock, flags) \
++	do {					\
++		(void)(flags);			\
++		raw_spin_lock(lock);		\
++	} while(0)
++
++#define raw_spin_unlock_irqrestore_cond(lock, flags) \
++	raw_spin_unlock(lock)
++
++#define __ipipe_spin_lock_irq(lock)		do { } while (0)
++#define __ipipe_spin_unlock_irq(lock)		do { } while (0)
++#define __ipipe_spin_lock_irqsave(lock)		0
++#define __ipipe_spin_trylock_irq(lock)		1
++#define __ipipe_spin_trylock_irqsave(lock, x)	({ (void)(x); 1; })
++#define __ipipe_spin_unlock_irqrestore(lock, x)	do { (void)(x); } while (0)
++#define __ipipe_spin_unlock_irqbegin(lock)	spin_unlock(lock)
++#define __ipipe_spin_unlock_irqcomplete(x)	do { (void)(x); } while (0)
++#define __ipipe_spin_unlock_debug(flags)	do { } while (0)
++
++#define ipipe_rwlock_t			rwlock_t
++#define IPIPE_DEFINE_RWLOCK(x)		DEFINE_RWLOCK(x)
++#define IPIPE_DECLARE_RWLOCK(x)		extern rwlock_t x
++#define IPIPE_RW_LOCK_UNLOCKED		RW_LOCK_UNLOCKED
++
++#endif /* !CONFIG_IPIPE */
++
++#endif /* !__LINUX_IPIPE_LOCK_H */
+diff --git a/include/linux/rwlock.h b/include/linux/rwlock.h
+index bc2994e..5e2da8d 100644
+--- a/include/linux/rwlock.h
++++ b/include/linux/rwlock.h
+@@ -61,8 +61,8 @@
+ #define read_trylock(lock)	__cond_lock(lock, _raw_read_trylock(lock))
+ #define write_trylock(lock)	__cond_lock(lock, _raw_write_trylock(lock))
+ 
+-#define write_lock(lock)	_raw_write_lock(lock)
+-#define read_lock(lock)		_raw_read_lock(lock)
++#define write_lock(lock)	PICK_RWOP(_write_lock, lock)
++#define read_lock(lock)		PICK_RWOP(_read_lock, lock)
+ 
+ #if defined(CONFIG_SMP) || defined(CONFIG_DEBUG_SPINLOCK)
+ 
+@@ -96,8 +96,8 @@
+ #define read_lock_bh(lock)		_raw_read_lock_bh(lock)
+ #define write_lock_irq(lock)		_raw_write_lock_irq(lock)
+ #define write_lock_bh(lock)		_raw_write_lock_bh(lock)
+-#define read_unlock(lock)		_raw_read_unlock(lock)
+-#define write_unlock(lock)		_raw_write_unlock(lock)
++#define read_unlock(lock)		PICK_RWOP(_read_unlock, lock)
++#define write_unlock(lock)		PICK_RWOP(_write_unlock, lock)
+ #define read_unlock_irq(lock)		_raw_read_unlock_irq(lock)
+ #define write_unlock_irq(lock)		_raw_write_unlock_irq(lock)
+ 
+diff --git a/include/linux/rwlock_api_smp.h b/include/linux/rwlock_api_smp.h
+index 5b9b84b..6c8bb4d 100644
+--- a/include/linux/rwlock_api_smp.h
++++ b/include/linux/rwlock_api_smp.h
+@@ -141,7 +141,9 @@ static inline int __raw_write_trylock(rwlock_t *lock)
+  * even on CONFIG_PREEMPT, because lockdep assumes that interrupts are
+  * not re-enabled during lock-acquire (which the preempt-spin-ops do):
+  */
+-#if !defined(CONFIG_GENERIC_LOCKBREAK) || defined(CONFIG_DEBUG_LOCK_ALLOC)
++#if !defined(CONFIG_GENERIC_LOCKBREAK) ||	\
++	defined(CONFIG_DEBUG_LOCK_ALLOC) ||	\
++	defined(CONFIG_IPIPE)
+ 
+ static inline void __raw_read_lock(rwlock_t *lock)
+ {
+diff --git a/include/linux/spinlock.h b/include/linux/spinlock.h
+index 341e1a1..f2f45ed 100644
+--- a/include/linux/spinlock.h
++++ b/include/linux/spinlock.h
+@@ -90,10 +90,12 @@
+ # include <linux/spinlock_up.h>
+ #endif
+ 
++#include <linux/ipipe_lock.h>
++
+ #ifdef CONFIG_DEBUG_SPINLOCK
+   extern void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
+ 				   struct lock_class_key *key);
+-# define raw_spin_lock_init(lock)				\
++# define __real_raw_spin_lock_init(lock)			\
+ do {								\
+ 	static struct lock_class_key __key;			\
+ 								\
+@@ -101,11 +103,14 @@
+ } while (0)
+ 
+ #else
+-# define raw_spin_lock_init(lock)				\
++# define __real_raw_spin_lock_init(lock)			\
+ 	do { *(lock) = __RAW_SPIN_LOCK_UNLOCKED(lock); } while (0)
+ #endif
++#define raw_spin_lock_init(lock)	PICK_SPINOP(_lock_init, lock)
+ 
+-#define raw_spin_is_locked(lock)	arch_spin_is_locked(&(lock)->raw_lock)
++#define __real_raw_spin_is_locked(lock)				\
++	arch_spin_is_locked(&(lock)->raw_lock)
++#define raw_spin_is_locked(lock)	PICK_SPINOP_RET(_is_locked, lock, int)
+ 
+ #ifdef CONFIG_GENERIC_LOCKBREAK
+ #define raw_spin_is_contended(lock) ((lock)->break_lock)
+@@ -191,9 +196,11 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
+  * various methods are defined as nops in the case they are not
+  * required.
+  */
+-#define raw_spin_trylock(lock)	__cond_lock(lock, _raw_spin_trylock(lock))
++#define __real_raw_spin_trylock(lock)	__cond_lock(lock, _raw_spin_trylock(lock))
++#define raw_spin_trylock(lock)		PICK_SPINOP_RET(_trylock, lock, int)
+ 
+-#define raw_spin_lock(lock)	_raw_spin_lock(lock)
++#define __real_raw_spin_lock(lock)	_raw_spin_lock(lock)
++#define raw_spin_lock(lock)		PICK_SPINOP(_lock, lock)
+ 
+ #ifdef CONFIG_DEBUG_LOCK_ALLOC
+ # define raw_spin_lock_nested(lock, subclass) \
+@@ -217,7 +224,7 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
+ 
+ #if defined(CONFIG_SMP) || defined(CONFIG_DEBUG_SPINLOCK)
+ 
+-#define raw_spin_lock_irqsave(lock, flags)			\
++#define __real_raw_spin_lock_irqsave(lock, flags)	\
+ 	do {						\
+ 		typecheck(unsigned long, flags);	\
+ 		flags = _raw_spin_lock_irqsave(lock);	\
+@@ -239,7 +246,7 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
+ 
+ #else
+ 
+-#define raw_spin_lock_irqsave(lock, flags)		\
++#define __real_raw_spin_lock_irqsave(lock, flags)	\
+ 	do {						\
+ 		typecheck(unsigned long, flags);	\
+ 		_raw_spin_lock_irqsave(lock, flags);	\
+@@ -250,34 +257,46 @@ static inline void do_raw_spin_unlock(raw_spinlock_t *lock) __releases(lock)
+ 
+ #endif
+ 
+-#define raw_spin_lock_irq(lock)		_raw_spin_lock_irq(lock)
++#define raw_spin_lock_irqsave(lock, flags)  \
++	PICK_SPINLOCK_IRQSAVE(lock, flags)
++
++#define __real_raw_spin_lock_irq(lock)	_raw_spin_lock_irq(lock)
++#define raw_spin_lock_irq(lock)		PICK_SPINOP(_lock_irq, lock)
+ #define raw_spin_lock_bh(lock)		_raw_spin_lock_bh(lock)
+-#define raw_spin_unlock(lock)		_raw_spin_unlock(lock)
+-#define raw_spin_unlock_irq(lock)	_raw_spin_unlock_irq(lock)
++#define __real_raw_spin_unlock(lock)	_raw_spin_unlock(lock)
++#define raw_spin_unlock(lock)		PICK_SPINOP(_unlock, lock)
++#define __real_raw_spin_unlock_irq(lock) _raw_spin_unlock_irq(lock)
++#define raw_spin_unlock_irq(lock)	PICK_SPINOP(_unlock_irq, lock)
+ 
+-#define raw_spin_unlock_irqrestore(lock, flags)		\
++#define __real_raw_spin_unlock_irqrestore(lock, flags)		\
+ 	do {							\
+ 		typecheck(unsigned long, flags);		\
+ 		_raw_spin_unlock_irqrestore(lock, flags);	\
+ 	} while (0)
++#define raw_spin_unlock_irqrestore(lock, flags)	\
++	PICK_SPINUNLOCK_IRQRESTORE(lock, flags)
++
+ #define raw_spin_unlock_bh(lock)	_raw_spin_unlock_bh(lock)
+ 
+ #define raw_spin_trylock_bh(lock) \
+ 	__cond_lock(lock, _raw_spin_trylock_bh(lock))
+ 
+-#define raw_spin_trylock_irq(lock) \
++#define __real_raw_spin_trylock_irq(lock) \
+ ({ \
+ 	local_irq_disable(); \
+-	raw_spin_trylock(lock) ? \
++	__real_raw_spin_trylock(lock) ? \
+ 	1 : ({ local_irq_enable(); 0;  }); \
+ })
++#define raw_spin_trylock_irq(lock)	PICK_SPINTRYLOCK_IRQ(lock)
+ 
+-#define raw_spin_trylock_irqsave(lock, flags) \
++#define __real_raw_spin_trylock_irqsave(lock, flags) \
+ ({ \
+ 	local_irq_save(flags); \
+ 	raw_spin_trylock(lock) ? \
+ 	1 : ({ local_irq_restore(flags); 0; }); \
+ })
++#define raw_spin_trylock_irqsave(lock, flags)	\
++	PICK_SPINTRYLOCK_IRQSAVE(lock, flags)
+ 
+ /**
+  * raw_spin_can_lock - would raw_spin_trylock() succeed?
+@@ -308,24 +327,17 @@ static __always_inline raw_spinlock_t *spinlock_check(spinlock_t *lock)
+ 
+ #define spin_lock_init(_lock)				\
+ do {							\
+-	spinlock_check(_lock);				\
+-	raw_spin_lock_init(&(_lock)->rlock);		\
++	raw_spin_lock_init(_lock);			\
+ } while (0)
+ 
+-static __always_inline void spin_lock(spinlock_t *lock)
+-{
+-	raw_spin_lock(&lock->rlock);
+-}
++#define spin_lock(lock)		raw_spin_lock(lock)
+ 
+ static __always_inline void spin_lock_bh(spinlock_t *lock)
+ {
+ 	raw_spin_lock_bh(&lock->rlock);
+ }
+ 
+-static __always_inline int spin_trylock(spinlock_t *lock)
+-{
+-	return raw_spin_trylock(&lock->rlock);
+-}
++#define spin_trylock(lock)	raw_spin_trylock(lock)
+ 
+ #define spin_lock_nested(lock, subclass)			\
+ do {								\
+@@ -337,14 +349,11 @@ static __always_inline int spin_trylock(spinlock_t *lock)
+ 	raw_spin_lock_nest_lock(spinlock_check(lock), nest_lock);	\
+ } while (0)
+ 
+-static __always_inline void spin_lock_irq(spinlock_t *lock)
+-{
+-	raw_spin_lock_irq(&lock->rlock);
+-}
++#define spin_lock_irq(lock)	raw_spin_lock_irq(lock)
+ 
+ #define spin_lock_irqsave(lock, flags)				\
+ do {								\
+-	raw_spin_lock_irqsave(spinlock_check(lock), flags);	\
++	raw_spin_lock_irqsave(lock, flags);			\
+ } while (0)
+ 
+ #define spin_lock_irqsave_nested(lock, flags, subclass)			\
+@@ -352,39 +361,28 @@ static __always_inline void spin_lock_irq(spinlock_t *lock)
+ 	raw_spin_lock_irqsave_nested(spinlock_check(lock), flags, subclass); \
+ } while (0)
+ 
+-static __always_inline void spin_unlock(spinlock_t *lock)
+-{
+-	raw_spin_unlock(&lock->rlock);
+-}
++#define spin_unlock(lock)	raw_spin_unlock(lock)
+ 
+ static __always_inline void spin_unlock_bh(spinlock_t *lock)
+ {
+ 	raw_spin_unlock_bh(&lock->rlock);
+ }
+ 
+-static __always_inline void spin_unlock_irq(spinlock_t *lock)
+-{
+-	raw_spin_unlock_irq(&lock->rlock);
+-}
++#define spin_unlock_irq(lock)	raw_spin_unlock_irq(lock)
+ 
+-static __always_inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+-{
+-	raw_spin_unlock_irqrestore(&lock->rlock, flags);
+-}
++#define spin_unlock_irqrestore(lock, flags)	\
++	raw_spin_unlock_irqrestore(lock, flags)
+ 
+ static __always_inline int spin_trylock_bh(spinlock_t *lock)
+ {
+ 	return raw_spin_trylock_bh(&lock->rlock);
+ }
+ 
+-static __always_inline int spin_trylock_irq(spinlock_t *lock)
+-{
+-	return raw_spin_trylock_irq(&lock->rlock);
+-}
++#define spin_trylock_irq(lock)	raw_spin_trylock_irq(lock)
+ 
+ #define spin_trylock_irqsave(lock, flags)			\
+ ({								\
+-	raw_spin_trylock_irqsave(spinlock_check(lock), flags); \
++	raw_spin_trylock_irqsave(lock, flags);			\
+ })
+ 
+ static __always_inline int spin_is_locked(spinlock_t *lock)
+diff --git a/include/linux/spinlock_api_smp.h b/include/linux/spinlock_api_smp.h
+index 42dfab8..ebdc2a9 100644
+--- a/include/linux/spinlock_api_smp.h
++++ b/include/linux/spinlock_api_smp.h
+@@ -99,7 +99,9 @@ static inline int __raw_spin_trylock(raw_spinlock_t *lock)
+  * even on CONFIG_PREEMPT, because lockdep assumes that interrupts are
+  * not re-enabled during lock-acquire (which the preempt-spin-ops do):
+  */
+-#if !defined(CONFIG_GENERIC_LOCKBREAK) || defined(CONFIG_DEBUG_LOCK_ALLOC)
++#if !defined(CONFIG_GENERIC_LOCKBREAK) ||	\
++	defined(CONFIG_DEBUG_LOCK_ALLOC) ||	\
++	defined(CONFIG_IPIPE)
+ 
+ static inline unsigned long __raw_spin_lock_irqsave(raw_spinlock_t *lock)
+ {
+@@ -113,7 +115,7 @@ static inline unsigned long __raw_spin_lock_irqsave(raw_spinlock_t *lock)
+ 	 * do_raw_spin_lock_flags() code, because lockdep assumes
+ 	 * that interrupts are not re-enabled during lock-acquire:
+ 	 */
+-#ifdef CONFIG_LOCKDEP
++#if defined(CONFIG_LOCKDEP) || defined(CONFIG_IPIPE)
+ 	LOCK_CONTENDED(lock, do_raw_spin_trylock, do_raw_spin_lock);
+ #else
+ 	do_raw_spin_lock_flags(lock, &flags);
+diff --git a/include/linux/spinlock_up.h b/include/linux/spinlock_up.h
+index 612fb53..5bac4d6 100644
+--- a/include/linux/spinlock_up.h
++++ b/include/linux/spinlock_up.h
+@@ -56,16 +56,6 @@ static inline void arch_spin_unlock(arch_spinlock_t *lock)
+ 	lock->slock = 1;
+ }
+ 
+-/*
+- * Read-write spinlocks. No debug version.
+- */
+-#define arch_read_lock(lock)		do { barrier(); (void)(lock); } while (0)
+-#define arch_write_lock(lock)		do { barrier(); (void)(lock); } while (0)
+-#define arch_read_trylock(lock)	({ barrier(); (void)(lock); 1; })
+-#define arch_write_trylock(lock)	({ barrier(); (void)(lock); 1; })
+-#define arch_read_unlock(lock)		do { barrier(); (void)(lock); } while (0)
+-#define arch_write_unlock(lock)	do { barrier(); (void)(lock); } while (0)
+-
+ #else /* DEBUG_SPINLOCK */
+ #define arch_spin_is_locked(lock)	((void)(lock), 0)
+ /* for sched/core.c and kernel_lock.c: */
+@@ -75,6 +65,13 @@ static inline void arch_spin_unlock(arch_spinlock_t *lock)
+ # define arch_spin_trylock(lock)	({ barrier(); (void)(lock); 1; })
+ #endif /* DEBUG_SPINLOCK */
+ 
++#define arch_read_lock(lock)		do { barrier(); (void)(lock); } while (0)
++#define arch_write_lock(lock)		do { barrier(); (void)(lock); } while (0)
++#define arch_read_trylock(lock)	({ barrier(); (void)(lock); 1; })
++#define arch_write_trylock(lock)	({ barrier(); (void)(lock); 1; })
++#define arch_read_unlock(lock)		do { barrier(); (void)(lock); } while (0)
++#define arch_write_unlock(lock)	do { barrier(); (void)(lock); } while (0)
++
+ #define arch_spin_is_contended(lock)	(((void)(lock), 0))
+ 
+ #define arch_read_can_lock(lock)	(((void)(lock), 1))
+diff --git a/kernel/ipipe/core.c b/kernel/ipipe/core.c
+index e60ad17..2ac38c4 100644
+--- a/kernel/ipipe/core.c
++++ b/kernel/ipipe/core.c
+@@ -497,6 +497,95 @@ void __ipipe_restore_head(unsigned long x) /* hw interrupt off */
+ }
+ EXPORT_SYMBOL_GPL(__ipipe_restore_head);
+ 
++void __ipipe_spin_lock_irq(ipipe_spinlock_t *lock)
++{
++	hard_local_irq_disable();
++	if (ipipe_smp_p)
++		arch_spin_lock(&lock->arch_lock);
++	__set_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_lock_irq);
++
++void __ipipe_spin_unlock_irq(ipipe_spinlock_t *lock)
++{
++	if (ipipe_smp_p)
++		arch_spin_unlock(&lock->arch_lock);
++	__clear_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++	hard_local_irq_enable();
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_unlock_irq);
++
++unsigned long __ipipe_spin_lock_irqsave(ipipe_spinlock_t *lock)
++{
++	unsigned long flags;
++	int s;
++
++	flags = hard_local_irq_save();
++	if (ipipe_smp_p)
++		arch_spin_lock(&lock->arch_lock);
++	s = __test_and_set_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++
++	return arch_mangle_irq_bits(s, flags);
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_lock_irqsave);
++
++int __ipipe_spin_trylock_irqsave(ipipe_spinlock_t *lock,
++				 unsigned long *x)
++{
++	unsigned long flags;
++	int s;
++
++	flags = hard_local_irq_save();
++	if (ipipe_smp_p && !arch_spin_trylock(&lock->arch_lock)) {
++		hard_local_irq_restore(flags);
++		return 0;
++	}
++	s = __test_and_set_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++	*x = arch_mangle_irq_bits(s, flags);
++
++	return 1;
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_trylock_irqsave);
++
++void __ipipe_spin_unlock_irqrestore(ipipe_spinlock_t *lock,
++				    unsigned long x)
++{
++	if (ipipe_smp_p)
++		arch_spin_unlock(&lock->arch_lock);
++	if (!arch_demangle_irq_bits(&x))
++		__clear_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++	hard_local_irq_restore(x);
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_unlock_irqrestore);
++
++int __ipipe_spin_trylock_irq(ipipe_spinlock_t *lock)
++{
++	unsigned long flags;
++
++	flags = hard_local_irq_save();
++	if (ipipe_smp_p && !arch_spin_trylock(&lock->arch_lock)) {
++		hard_local_irq_restore(flags);
++		return 0;
++	}
++	__set_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++
++	return 1;
++}
++EXPORT_SYMBOL_GPL(__ipipe_spin_trylock_irq);
++
++void __ipipe_spin_unlock_irqbegin(ipipe_spinlock_t *lock)
++{
++	if (ipipe_smp_p)
++		arch_spin_unlock(&lock->arch_lock);
++}
++
++void __ipipe_spin_unlock_irqcomplete(unsigned long x)
++{
++	if (!arch_demangle_irq_bits(&x))
++		__clear_bit(IPIPE_STALL_FLAG, &__ipipe_current_context->status);
++	hard_local_irq_restore(x);
++}
++
+ #ifdef __IPIPE_3LEVEL_IRQMAP
+ 
+ /* Must be called hw IRQs off. */
+@@ -1367,6 +1456,20 @@ unsigned long notrace __ipipe_cpu_get_offset(void)
+ }
+ EXPORT_SYMBOL(__ipipe_cpu_get_offset);
+ 
++void __ipipe_spin_unlock_debug(unsigned long flags)
++{
++	/*
++	 * We catch a nasty issue where spin_unlock_irqrestore() on a
++	 * regular kernel spinlock is about to re-enable hw interrupts
++	 * in a section entered with hw irqs off. This is clearly the
++	 * sign of a massive breakage coming. Usual suspect is a
++	 * regular spinlock which was overlooked, used within a
++	 * section which must run with hw irqs disabled.
++	 */
++	IPIPE_WARN_ONCE(!raw_irqs_disabled_flags(flags) && hard_irqs_disabled());
++}
++EXPORT_SYMBOL(__ipipe_spin_unlock_debug);
++
+ #endif /* CONFIG_IPIPE_DEBUG_INTERNAL && CONFIG_SMP */
+ 
+ void ipipe_prepare_panic(void)
+diff --git a/kernel/locking/lockdep.c b/kernel/locking/lockdep.c
+index d7c1550..4dd8ed7 100644
+--- a/kernel/locking/lockdep.c
++++ b/kernel/locking/lockdep.c
+@@ -2886,6 +2886,9 @@ static void __trace_hardirqs_on_caller(unsigned long ip)
+ 
+ __visible void trace_hardirqs_on_caller(unsigned long ip)
+ {
++	if (!ipipe_root_p)
++		return;
++
+ 	time_hardirqs_on(CALLER_ADDR0, ip);
+ 
+ 	if (unlikely(!debug_locks || current->lockdep_recursion))
+@@ -2906,7 +2909,7 @@ __visible void trace_hardirqs_on_caller(unsigned long ip)
+ 	 * already enabled, yet we find the hardware thinks they are in fact
+ 	 * enabled.. someone messed up their IRQ state tracing.
+ 	 */
+-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
++	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
+ 		return;
+ 
+ 	/*
+@@ -2939,7 +2942,12 @@ void trace_hardirqs_on(void)
+  */
+ __visible void trace_hardirqs_off_caller(unsigned long ip)
+ {
+-	struct task_struct *curr = current;
++	struct task_struct *curr;
++
++	if (!ipipe_root_p)
++		return;
++
++	curr = current;
+ 
+ 	time_hardirqs_off(CALLER_ADDR0, ip);
+ 
+@@ -2950,7 +2958,7 @@ __visible void trace_hardirqs_off_caller(unsigned long ip)
+ 	 * So we're supposed to get called after you mask local IRQs, but for
+ 	 * some reason the hardware doesn't quite think you did a proper job.
+ 	 */
+-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
++	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
+ 		return;
+ 
+ 	if (curr->hardirqs_enabled) {
+@@ -2986,7 +2994,7 @@ void trace_softirqs_on(unsigned long ip)
+ 	 * We fancy IRQs being disabled here, see softirq.c, avoids
+ 	 * funny state and nesting things.
+ 	 */
+-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
++	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
+ 		return;
+ 
+ 	if (curr->softirqs_enabled) {
+@@ -3025,7 +3033,7 @@ void trace_softirqs_off(unsigned long ip)
+ 	/*
+ 	 * We fancy IRQs being disabled here, see softirq.c
+ 	 */
+-	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled()))
++	if (DEBUG_LOCKS_WARN_ON(!irqs_disabled() && !hard_irqs_disabled()))
+ 		return;
+ 
+ 	if (curr->softirqs_enabled) {
+diff --git a/kernel/locking/spinlock.c b/kernel/locking/spinlock.c
+index 6e40fdf..46698d6 100644
+--- a/kernel/locking/spinlock.c
++++ b/kernel/locking/spinlock.c
+@@ -27,7 +27,9 @@
+  * even on CONFIG_PREEMPT, because lockdep assumes that interrupts are
+  * not re-enabled during lock-acquire (which the preempt-spin-ops do):
+  */
+-#if !defined(CONFIG_GENERIC_LOCKBREAK) || defined(CONFIG_DEBUG_LOCK_ALLOC)
++#if !defined(CONFIG_GENERIC_LOCKBREAK) ||			\
++	defined(CONFIG_DEBUG_LOCK_ALLOC) ||			\
++	defined(CONFIG_IPIPE)
+ /*
+  * The __lock_function inlines are taken from
+  * include/linux/spinlock_api_smp.h
+diff --git a/lib/bust_spinlocks.c b/lib/bust_spinlocks.c
+index ab71949..35e3184 100644
+--- a/lib/bust_spinlocks.c
++++ b/lib/bust_spinlocks.c
+@@ -15,6 +15,7 @@
+ #include <linux/wait.h>
+ #include <linux/vt_kern.h>
+ #include <linux/console.h>
++#include <linux/ipipe_trace.h>
+ 
+ 
+ void __attribute__((weak)) bust_spinlocks(int yes)
+@@ -26,6 +27,7 @@ void __attribute__((weak)) bust_spinlocks(int yes)
+ 		unblank_screen();
+ #endif
+ 		console_unblank();
++  		ipipe_trace_panic_dump();
+ 		if (--oops_in_progress == 0)
+ 			wake_up_klogd();
+ 	}
+-- 
+1.9.1
+

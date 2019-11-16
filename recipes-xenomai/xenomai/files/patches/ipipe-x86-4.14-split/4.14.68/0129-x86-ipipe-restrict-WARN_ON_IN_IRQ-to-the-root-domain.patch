@@ -1,0 +1,38 @@
+From 0ccefa2b9dbf0c7d7895c786f15ae86a50a4b0ad Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 21 Sep 2018 17:54:18 +0200
+Subject: [PATCH 129/137] x86: ipipe: restrict WARN_ON_IN_IRQ() to the root
+ domain
+
+We have no way to figure out the current context unless the root
+domain is active. Make sure we won't trigger false positives with
+WARN_ON_IN_IRQ() which may be invoked through calls to access_ok()
+from the head domain.
+---
+ arch/x86/include/asm/uaccess.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/x86/include/asm/uaccess.h b/arch/x86/include/asm/uaccess.h
+index aae77eb..b17f4b7 100644
+--- a/arch/x86/include/asm/uaccess.h
++++ b/arch/x86/include/asm/uaccess.h
+@@ -7,6 +7,7 @@
+ #include <linux/compiler.h>
+ #include <linux/kasan-checks.h>
+ #include <linux/string.h>
++#include <linux/ipipe.h>
+ #include <asm/asm.h>
+ #include <asm/page.h>
+ #include <asm/smap.h>
+@@ -70,7 +71,7 @@ static inline bool __chk_range_not_ok(unsigned long addr, unsigned long size, un
+ })
+ 
+ #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
+-# define WARN_ON_IN_IRQ()	WARN_ON_ONCE(!in_task())
++# define WARN_ON_IN_IRQ()	WARN_ON_ONCE(ipipe_root_p && !in_task())
+ #else
+ # define WARN_ON_IN_IRQ()
+ #endif
+-- 
+1.9.1
+

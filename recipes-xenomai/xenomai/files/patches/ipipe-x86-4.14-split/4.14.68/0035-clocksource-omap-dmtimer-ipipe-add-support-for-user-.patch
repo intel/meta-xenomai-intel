@@ -1,0 +1,87 @@
+From aba560daf6d6939a53b8413efb75cf60ecd2929a Mon Sep 17 00:00:00 2001
+From: Gilles Chanteperdrix <gilles.chanteperdrix@xenomai.org>
+Date: Sun, 3 Dec 2017 18:20:28 +0100
+Subject: [PATCH 035/137] clocksource: omap/dmtimer: ipipe: add support for
+ user-visible TSC
+
+Expose the clocksource to userland processes via the ARM-specific
+user-TSC interface.
+---
+ arch/arm/plat-omap/dmtimer.c              | 17 +++++++++++++++--
+ arch/arm/plat-omap/include/plat/dmtimer.h |  6 ++++++
+ 2 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm/plat-omap/dmtimer.c b/arch/arm/plat-omap/dmtimer.c
+index ebef8aa..4e8cfc4 100644
+--- a/arch/arm/plat-omap/dmtimer.c
++++ b/arch/arm/plat-omap/dmtimer.c
+@@ -395,6 +395,18 @@ int omap_dm_timer_get_irq(struct omap_dm_timer *timer)
+ }
+ EXPORT_SYMBOL_GPL(omap_dm_timer_get_irq);
+ 
++#ifdef CONFIG_IPIPE
++unsigned long omap_dm_timer_get_phys_counter_addr(struct omap_dm_timer *timer)
++{
++	return timer->phys_base + (OMAP_TIMER_COUNTER_REG & 0xff);
++}
++
++unsigned long omap_dm_timer_get_virt_counter_addr(struct omap_dm_timer *timer)
++{
++	return (unsigned long)timer->io_base + (OMAP_TIMER_COUNTER_REG & 0xff);
++}
++#endif /* CONFIG_IPIPE */
++
+ #if defined(CONFIG_ARCH_OMAP1)
+ #include <mach/hardware.h>
+ /**
+@@ -572,7 +584,7 @@ int omap_dm_timer_set_source(struct omap_dm_timer *timer, int source)
+ EXPORT_SYMBOL_GPL(omap_dm_timer_set_source);
+ 
+ int omap_dm_timer_set_load(struct omap_dm_timer *timer, int autoreload,
+-			    unsigned int load)
++                            unsigned int load)
+ {
+ 	u32 l;
+ 
+@@ -599,7 +611,7 @@ int omap_dm_timer_set_load(struct omap_dm_timer *timer, int autoreload,
+ 
+ /* Optimized set_load which removes costly spin wait in timer_start */
+ int omap_dm_timer_set_load_start(struct omap_dm_timer *timer, int autoreload,
+-                            unsigned int load)
++			    unsigned int load)
+ {
+ 	u32 l;
+ 
+@@ -864,6 +876,7 @@ static int omap_dm_timer_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	timer->fclk = ERR_PTR(-ENODEV);
++	timer->phys_base = mem->start;
+ 	timer->io_base = devm_ioremap_resource(dev, mem);
+ 	if (IS_ERR(timer->io_base))
+ 		return PTR_ERR(timer->io_base);
+diff --git a/arch/arm/plat-omap/include/plat/dmtimer.h b/arch/arm/plat-omap/include/plat/dmtimer.h
+index dd79f30..ee368c4 100644
+--- a/arch/arm/plat-omap/include/plat/dmtimer.h
++++ b/arch/arm/plat-omap/include/plat/dmtimer.h
+@@ -104,6 +104,7 @@ struct omap_dm_timer {
+ 	int irq;
+ 	struct clk *fclk;
+ 
++	unsigned long	phys_base;
+ 	void __iomem	*io_base;
+ 	void __iomem	*irq_stat;	/* TISR/IRQSTATUS interrupt status */
+ 	void __iomem	*irq_ena;	/* irq enable */
+@@ -415,4 +416,9 @@ static inline void __omap_dm_timer_write_status(struct omap_dm_timer *timer,
+ 	writel_relaxed(value, timer->irq_stat);
+ }
+ 
++static inline unsigned long __omap_dm_timer_read_status(struct omap_dm_timer *timer)
++{
++	return __raw_readl(timer->irq_stat);
++}
++
+ #endif /* __ASM_ARCH_DMTIMER_H */
+-- 
+1.9.1
+

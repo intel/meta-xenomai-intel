@@ -1,0 +1,32 @@
+From 7312621e6a771bce2f83a56cf81b60caf0709fa7 Mon Sep 17 00:00:00 2001
+From: Dongjiu Geng <gengdongjiu@huawei.com>
+Date: Mon, 25 Jun 2018 16:21:00 +0200
+Subject: [PATCH 041/137] clocksource: arm_arch_timer: ipipe: correct the wrong
+ ipipe_timer setup
+
+The arch_timer_mem_use_virtual variable is used to judge the type
+of memory-mapped timer, it can not be used to judge the type of CP15
+timer, so fix this issue, otherwise it will lead to kernel panic when
+running as a VM.
+
+Signed-off-by: Dongjiu Geng <gengdongjiu@huawei.com>
+---
+ drivers/clocksource/arm_arch_timer.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+index 0780f8b..37a55a8 100644
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -753,7 +753,7 @@ static void __arch_timer_setup(unsigned type,
+ 		arch_timer_check_ool_workaround(ate_match_local_cap_id, NULL);
+ #ifdef CONFIG_IPIPE
+ 		clk->ipipe_timer = raw_cpu_ptr(&arch_itimer);
+-		if (arch_timer_mem_use_virtual) {
++		if (arch_timer_uses_ppi == ARCH_TIMER_VIRT_PPI) {
+ 			clk->ipipe_timer->irq = arch_timer_ppi[ARCH_TIMER_VIRT_PPI];
+ 			clk->ipipe_timer->ack = arch_itimer_ack_virt;
+ 		} else {
+-- 
+1.9.1
+

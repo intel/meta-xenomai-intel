@@ -1,0 +1,30 @@
+From 3e36f119fc8653f974d82c277a3c2c99d9acfde9 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sat, 22 Sep 2018 15:44:57 +0200
+Subject: [PATCH 131/137] x86: ipipe: drop (obsolete) declarations
+
+---
+ arch/x86/kernel/ipipe.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/arch/x86/kernel/ipipe.c b/arch/x86/kernel/ipipe.c
+index c9a8104..e9cd4d9 100644
+--- a/arch/x86/kernel/ipipe.c
++++ b/arch/x86/kernel/ipipe.c
+@@ -88,13 +88,6 @@ int ipipe_get_sysinfo(struct ipipe_sysinfo *info)
+ }
+ EXPORT_SYMBOL_GPL(ipipe_get_sysinfo);
+ 
+-#ifdef CONFIG_X86_UV
+-asmlinkage void uv_bau_message_interrupt(struct pt_regs *regs);
+-#endif
+-#ifdef CONFIG_X86_MCE_THRESHOLD
+-asmlinkage void smp_threshold_interrupt(void);
+-#endif
+-
+ static void __ipipe_do_IRQ(unsigned int irq, void *cookie)
+ {
+ 	void (*handler)(struct pt_regs *regs);
+-- 
+1.9.1
+

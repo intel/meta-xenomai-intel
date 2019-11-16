@@ -1,0 +1,32 @@
+From a71c1c04e475d2a885779b59842a10ca1be1492a Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:14:07 +0100
+Subject: [PATCH 050/137] gpio: zynq: ipipe: fix build
+
+---
+ drivers/gpio/gpio-zynq.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpio/gpio-zynq.c b/drivers/gpio/gpio-zynq.c
+index f961274..4dd3627 100644
+--- a/drivers/gpio/gpio-zynq.c
++++ b/drivers/gpio/gpio-zynq.c
+@@ -225,7 +225,6 @@ static int zynq_gpio_get_value(struct gpio_chip *chip, unsigned int pin)
+ 	u32 data;
+ 	unsigned int bank_num, bank_pin_num;
+ 	struct zynq_gpio *gpio = gpiochip_get_data(chip);
+-	unsigned long flags;
+ 
+ 	zynq_gpio_get_bank_pin(pin, &bank_num, &bank_pin_num, gpio);
+ 
+@@ -306,6 +305,7 @@ static int zynq_gpio_dir_in(struct gpio_chip *chip, unsigned int pin)
+ 	u32 reg;
+ 	unsigned int bank_num, bank_pin_num;
+ 	struct zynq_gpio *gpio = gpiochip_get_data(chip);
++	unsigned long flags;
+ 
+ 	zynq_gpio_get_bank_pin(pin, &bank_num, &bank_pin_num, gpio);
+ 
+-- 
+1.9.1
+

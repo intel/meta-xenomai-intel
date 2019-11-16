@@ -1,0 +1,75 @@
+From ee12f1ba7f8aa5879dcb3c47b07c27eb1c8bca67 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 21 Sep 2018 17:17:52 +0200
+Subject: [PATCH 128/137] x86: ipipe: fix stack overflow detection
+
+Since do_IRQ() may be called from a plain regular task context if the
+original interrupt was deferred by the pipeline core for the root
+stage, we cannot assume regs->sp should within the current task's
+stack page if it does not point within the IRQ stack.
+
+Make sure to test the right stack pointer against the proper stack
+space, removing the previous attempt to force regs->sp to
+current_stack_pointer, which won't work if the static tick regs space
+is reused by another timer IRQ piling up on pipeline entry, preempting
+the do_IRQ() context.
+---
+ arch/x86/kernel/ipipe.c  |  1 -
+ arch/x86/kernel/irq_64.c | 12 +++++++-----
+ 2 files changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/kernel/ipipe.c b/arch/x86/kernel/ipipe.c
+index fa92ee3..c9a8104 100644
+--- a/arch/x86/kernel/ipipe.c
++++ b/arch/x86/kernel/ipipe.c
+@@ -102,7 +102,6 @@ static void __ipipe_do_IRQ(unsigned int irq, void *cookie)
+ 
+ 	regs = raw_cpu_ptr(&ipipe_percpu.tick_regs);
+ 	regs->orig_ax = ~__ipipe_get_irq_vector(irq);
+-	regs->sp = current_stack_pointer; /* stack_overflow_check(). */
+ 	handler = (typeof(handler))cookie;
+ 	handler(regs);
+ }
+diff --git a/arch/x86/kernel/irq_64.c b/arch/x86/kernel/irq_64.c
+index 0469cd0..1ba593b 100644
+--- a/arch/x86/kernel/irq_64.c
++++ b/arch/x86/kernel/irq_64.c
+@@ -38,28 +38,30 @@ static inline void stack_overflow_check(struct pt_regs *regs)
+ 	u64 irq_stack_top, irq_stack_bottom;
+ 	u64 estack_top, estack_bottom;
+ 	u64 curbase = (u64)task_stack_page(current);
++	unsigned long sp;
+ 
+ 	if (user_mode(regs))
+ 		return;
+ 
+-	if (regs->sp >= curbase + sizeof(struct pt_regs) + STACK_TOP_MARGIN &&
+-	    regs->sp <= curbase + THREAD_SIZE)
++	sp = IS_ENABLED(CONFIG_IPIPE) ? current_stack_pointer : regs->sp;
++	if (sp >= curbase + sizeof(struct pt_regs) + STACK_TOP_MARGIN &&
++	    sp <= curbase + THREAD_SIZE)
+ 		return;
+ 
+ 	irq_stack_top = (u64)this_cpu_ptr(irq_stack_union.irq_stack) +
+ 			STACK_TOP_MARGIN;
+ 	irq_stack_bottom = (u64)__this_cpu_read(irq_stack_ptr);
+-	if (regs->sp >= irq_stack_top && regs->sp <= irq_stack_bottom)
++	if (sp >= irq_stack_top && sp <= irq_stack_bottom)
+ 		return;
+ 
+ 	oist = this_cpu_ptr(&orig_ist);
+ 	estack_top = (u64)oist->ist[0] - EXCEPTION_STKSZ + STACK_TOP_MARGIN;
+ 	estack_bottom = (u64)oist->ist[N_EXCEPTION_STACKS - 1];
+-	if (regs->sp >= estack_top && regs->sp <= estack_bottom)
++	if (sp >= estack_top && sp <= estack_bottom)
+ 		return;
+ 
+ 	WARN_ONCE(1, "do_IRQ(): %s has overflown the kernel stack (cur:%Lx,sp:%lx,irq stk top-bottom:%Lx-%Lx,exception stk top-bottom:%Lx-%Lx,ip:%pF)\n",
+-		current->comm, curbase, regs->sp,
++		current->comm, curbase, sp,
+ 		irq_stack_top, irq_stack_bottom,
+ 		estack_top, estack_bottom, (void *)regs->ip);
+ 
+-- 
+1.9.1
+

@@ -1,0 +1,24 @@
+From 3bf9a61320e2a0857a50bf8ac0ed8a0595934aba Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:13:45 +0100
+Subject: [PATCH 048/137] gpio: mvebu: ipipe: fix build
+
+---
+ drivers/gpio/gpio-mvebu.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/gpio/gpio-mvebu.c b/drivers/gpio/gpio-mvebu.c
+index 50242fa..058362c 100644
+--- a/drivers/gpio/gpio-mvebu.c
++++ b/drivers/gpio/gpio-mvebu.c
+@@ -50,6 +50,7 @@
+ #include <linux/pwm.h>
+ #include <linux/regmap.h>
+ #include <linux/slab.h>
++#include <linux/ipipe.h>
+ 
+ #include "gpiolib.h"
+ 
+-- 
+1.9.1
+

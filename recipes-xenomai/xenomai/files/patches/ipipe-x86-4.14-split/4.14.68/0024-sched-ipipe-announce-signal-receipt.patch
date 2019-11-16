@@ -1,0 +1,54 @@
+From 6b32ecf987a4ed48a01893a395ff2a053c708555 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Thu, 5 Jul 2018 08:53:52 +0200
+Subject: [PATCH 024/137] sched: ipipe: announce signal receipt
+
+Emit IPIPE_KEVT_SIGWAKE when the target task is about to receive a
+(regular) signal. The co-kernel may decide to schedule a transition of
+the recipient to the root domain in order to have it handle that
+signal asap, which is commonly required for keeping the kernel sane.
+
+This notification is always sent from the context of the issuer.
+---
+ kernel/signal.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/signal.c b/kernel/signal.c
+index 4439ba9..baf3dfc 100644
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -32,6 +32,7 @@
+ #include <linux/tracehook.h>
+ #include <linux/capability.h>
+ #include <linux/freezer.h>
++#include <linux/ipipe.h>
+ #include <linux/pid_namespace.h>
+ #include <linux/nsproxy.h>
+ #include <linux/user_namespace.h>
+@@ -661,6 +662,10 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
+ void signal_wake_up_state(struct task_struct *t, unsigned int state)
+ {
+ 	set_tsk_thread_flag(t, TIF_SIGPENDING);
++
++	/* TIF_SIGPENDING must be prior to reporting. */
++	__ipipe_report_sigwake(t);
++
+ 	/*
+ 	 * TASK_WAKEKILL also means wake it up in the stopped/traced/killable
+ 	 * case. We don't check t->state here because there is a race with it
+@@ -884,8 +889,11 @@ static inline int wants_signal(int sig, struct task_struct *p)
+ 		return 0;
+ 	if (sig == SIGKILL)
+ 		return 1;
+-	if (task_is_stopped_or_traced(p))
++	if (task_is_stopped_or_traced(p)) {
++		if (!signal_pending(p))
++			__ipipe_report_sigwake(p);
+ 		return 0;
++	}
+ 	return task_curr(p) || !signal_pending(p);
+ }
+ 
+-- 
+1.9.1
+

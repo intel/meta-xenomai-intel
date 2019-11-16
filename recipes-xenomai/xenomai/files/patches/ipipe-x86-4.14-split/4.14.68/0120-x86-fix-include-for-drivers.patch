@@ -1,0 +1,24 @@
+From 843e30afec9e80286e5a4eb64974589015074b4f Mon Sep 17 00:00:00 2001
+From: Henning Schild <henning.schild@siemens.com>
+Date: Thu, 23 Aug 2018 11:59:38 +0000
+Subject: [PATCH 120/137] x86: fix include for drivers
+
+---
+ include/linux/gpio.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/include/linux/gpio.h b/include/linux/gpio.h
+index 8ef7fc0..41554f9 100644
+--- a/include/linux/gpio.h
++++ b/include/linux/gpio.h
+@@ -3,6 +3,7 @@
+ #define __LINUX_GPIO_H
+ 
+ #include <linux/errno.h>
++#include <linux/ipipe.h>
+ 
+ /* see Documentation/gpio/gpio-legacy.txt */
+ 
+-- 
+1.9.1
+

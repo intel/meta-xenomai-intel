@@ -1,0 +1,24 @@
+From cb23ea3666c67fdb07436f66fb2e5b3da944055c Mon Sep 17 00:00:00 2001
+From: Greg Gallagher <greg@embeddedgreg.com>
+Date: Tue, 6 Feb 2018 10:13:57 +0100
+Subject: [PATCH 049/137] gpio: pl061: ipipe: fix build
+
+---
+ drivers/gpio/gpio-pl061.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/gpio/gpio-pl061.c b/drivers/gpio/gpio-pl061.c
+index 97b093e..5f9be96 100644
+--- a/drivers/gpio/gpio-pl061.c
++++ b/drivers/gpio/gpio-pl061.c
+@@ -261,6 +261,7 @@ static void pl061_irq_mask_ack(struct irq_data *d)
+ 	writeb(gpioie, pl061->base + GPIOIE);
+ 	raw_spin_unlock(&pl061->lock);
+ }
++#endif
+ 
+ static void pl061_irq_unmask(struct irq_data *d)
+ {
+-- 
+1.9.1
+

@@ -1,0 +1,46 @@
+From 07e91985edf54011c7e46cdd2b1115b31058d3e7 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 26 Aug 2018 19:26:57 +0200
+Subject: [PATCH 090/137] ipipe: tick: revive the host tick after device grab
+
+Once the device was grabbed by ipipe_timer_start(), any pending host
+tick programmed in the hardware is basically lost, unknown to the
+co-kernel implementing the proxy handlers.
+
+Schedule a host event with the latest target time programmed to have
+the co-kernel know about the pending tick.
+---
+ kernel/ipipe/timer.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/kernel/ipipe/timer.c b/kernel/ipipe/timer.c
+index f01414f..2a48c71 100644
+--- a/kernel/ipipe/timer.c
++++ b/kernel/ipipe/timer.c
+@@ -387,6 +387,9 @@ static int do_set_shutdown(struct clock_event_device *cdev)
+ 	return 0;
+ }
+ 
++int clockevents_program_event(struct clock_event_device *dev,
++			      ktime_t expires, bool force);
++
+ int ipipe_timer_start(void (*tick_handler)(void),
+ 		      void (*emumode)(enum clock_event_mode mode,
+ 				      struct clock_event_device *cdev),
+@@ -442,6 +445,13 @@ int ipipe_timer_start(void (*tick_handler)(void),
+ 	if (desc && irqd_irq_disabled(&desc->irq_data))
+ 		ipipe_enable_irq(timer->irq);
+ 
++	local_irq_save(flags);
++
++	if (evtdev->ipipe_stolen && clockevent_state_oneshot(evtdev))
++		ret = clockevents_program_event(evtdev,
++						evtdev->next_event, true);
++	local_irq_restore(flags);
++	
+ 	return ret;
+ }
+ 
+-- 
+1.9.1
+

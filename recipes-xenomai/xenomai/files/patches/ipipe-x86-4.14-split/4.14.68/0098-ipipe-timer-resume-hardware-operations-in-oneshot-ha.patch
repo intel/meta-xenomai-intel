@@ -1,0 +1,34 @@
+From 61d766671ce523e72127982b130ae120fa022076 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Fri, 21 Sep 2018 13:25:13 +0200
+Subject: [PATCH 098/137] ipipe: timer: resume hardware operations in oneshot
+ handler
+
+Although we won't allow disabling the hardware when the clock event
+logic switches a device to stopped mode - so that we won't affect the
+timer logic running on the head stage unexpectedly -, we still have to
+enable the hardware when switched (back) to oneshot mode, since it may
+have been stopped prior to interposing on the device in
+ipipe_timer_start().
+
+Failing to do so would leave the hardware shut down for both regular
+and Xenomai operations, with no mean to bring it up again.
+---
+ kernel/ipipe/timer.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/ipipe/timer.c b/kernel/ipipe/timer.c
+index ae147d6..5696c28 100644
+--- a/kernel/ipipe/timer.c
++++ b/kernel/ipipe/timer.c
+@@ -364,6 +364,7 @@ static int do_set_oneshot(struct clock_event_device *cdev)
+ {
+ 	struct ipipe_timer *timer = __ipipe_raw_cpu_read(percpu_timer);
+ 
++	timer->orig_set_state_oneshot(cdev);
+ 	timer->mode_handler(CLOCK_EVT_MODE_ONESHOT, cdev);
+ 
+ 	return 0;
+-- 
+1.9.1
+

@@ -1,0 +1,64 @@
+From f546d047c76e1d3bd7e466c8035fb207501d6b32 Mon Sep 17 00:00:00 2001
+From: mukesh agrawal <quiche@google.com>
+Date: Tue, 12 Jul 2016 11:28:05 -0700
+Subject: [PATCH 4/6] ANDROID: trace: net: use %pK for kernel pointers
+
+We want to use network trace events in production
+builds, to help diagnose Wifi problems. However, we
+don't want to expose raw kernel pointers in such
+builds.
+
+Change the format specifier for the skbaddr field,
+so that, if kptr_restrict is enabled, the pointers
+will be reported as 0.
+
+Bug: 30090733
+Change-Id: Ic4bd583d37af6637343601feca875ee24479ddff
+Signed-off-by: mukesh agrawal <quiche@google.com>
+---
+ include/trace/events/net.h | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/include/trace/events/net.h b/include/trace/events/net.h
+index 9c88673..f1a300c 100644
+--- a/include/trace/events/net.h
++++ b/include/trace/events/net.h
+@@ -58,7 +58,7 @@
+ 		__entry->gso_type = skb_shinfo(skb)->gso_type;
+ 	),
+ 
+-	TP_printk("dev=%s queue_mapping=%u skbaddr=%p vlan_tagged=%d vlan_proto=0x%04x vlan_tci=0x%04x protocol=0x%04x ip_summed=%d len=%u data_len=%u network_offset=%d transport_offset_valid=%d transport_offset=%d tx_flags=%d gso_size=%d gso_segs=%d gso_type=%#x",
++	TP_printk("dev=%s queue_mapping=%u skbaddr=%pK vlan_tagged=%d vlan_proto=0x%04x vlan_tci=0x%04x protocol=0x%04x ip_summed=%d len=%u data_len=%u network_offset=%d transport_offset_valid=%d transport_offset=%d tx_flags=%d gso_size=%d gso_segs=%d gso_type=%#x",
+ 		  __get_str(name), __entry->queue_mapping, __entry->skbaddr,
+ 		  __entry->vlan_tagged, __entry->vlan_proto, __entry->vlan_tci,
+ 		  __entry->protocol, __entry->ip_summed, __entry->len,
+@@ -91,7 +91,7 @@
+ 		__assign_str(name, dev->name);
+ 	),
+ 
+-	TP_printk("dev=%s skbaddr=%p len=%u rc=%d",
++	TP_printk("dev=%s skbaddr=%pK len=%u rc=%d",
+ 		__get_str(name), __entry->skbaddr, __entry->len, __entry->rc)
+ );
+ 
+@@ -113,7 +113,7 @@
+ 		__assign_str(name, skb->dev->name);
+ 	),
+ 
+-	TP_printk("dev=%s skbaddr=%p len=%u",
++	TP_printk("dev=%s skbaddr=%pK len=%u",
+ 		__get_str(name), __entry->skbaddr, __entry->len)
+ )
+ 
+@@ -192,7 +192,7 @@
+ 		__entry->gso_type = skb_shinfo(skb)->gso_type;
+ 	),
+ 
+-	TP_printk("dev=%s napi_id=%#x queue_mapping=%u skbaddr=%p vlan_tagged=%d vlan_proto=0x%04x vlan_tci=0x%04x protocol=0x%04x ip_summed=%d hash=0x%08x l4_hash=%d len=%u data_len=%u truesize=%u mac_header_valid=%d mac_header=%d nr_frags=%d gso_size=%d gso_type=%#x",
++	TP_printk("dev=%s napi_id=%#x queue_mapping=%u skbaddr=%pK vlan_tagged=%d vlan_proto=0x%04x vlan_tci=0x%04x protocol=0x%04x ip_summed=%d hash=0x%08x l4_hash=%d len=%u data_len=%u truesize=%u mac_header_valid=%d mac_header=%d nr_frags=%d gso_size=%d gso_type=%#x",
+ 		  __get_str(name), __entry->napi_id, __entry->queue_mapping,
+ 		  __entry->skbaddr, __entry->vlan_tagged, __entry->vlan_proto,
+ 		  __entry->vlan_tci, __entry->protocol, __entry->ip_summed,
+-- 
+1.9.1
+

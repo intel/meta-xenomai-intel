@@ -1,0 +1,49 @@
+From b28fc61ad2bfa025a43211a8239927f946c95513 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 17:19:28 +0100
+Subject: [PATCH 051/137] gpu: ipu-v3: ipipe: enable interrupt pipelining
+
+Fix up the IPU (GPU) driver in order to channel interrupts through the
+interrupt pipeline.
+---
+ drivers/gpu/ipu-v3/ipu-common.c | 3 ++-
+ drivers/gpu/ipu-v3/ipu-prv.h    | 2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/ipu-v3/ipu-common.c b/drivers/gpu/ipu-v3/ipu-common.c
+index 658fa2d..f3ae064 100644
+--- a/drivers/gpu/ipu-v3/ipu-common.c
++++ b/drivers/gpu/ipu-v3/ipu-common.c
+@@ -1080,7 +1080,7 @@ static void ipu_irq_handle(struct ipu_soc *ipu, const int *regs, int num_regs)
+ 			irq = irq_linear_revmap(ipu->domain,
+ 						regs[i] * 32 + bit);
+ 			if (irq)
+-				generic_handle_irq(irq);
++				ipipe_handle_demuxed_irq(irq);
+ 		}
+ 	}
+ }
+@@ -1304,6 +1304,7 @@ static int ipu_irq_init(struct ipu_soc *ipu)
+ 		ct->chip.irq_ack = irq_gc_ack_set_bit;
+ 		ct->chip.irq_mask = irq_gc_mask_clr_bit;
+ 		ct->chip.irq_unmask = irq_gc_mask_set_bit;
++		ct->chip.flags = IRQCHIP_PIPELINE_SAFE;
+ 		ct->regs.ack = IPU_INT_STAT(i / 32);
+ 		ct->regs.mask = IPU_INT_CTRL(i / 32);
+ 	}
+diff --git a/drivers/gpu/ipu-v3/ipu-prv.h b/drivers/gpu/ipu-v3/ipu-prv.h
+index ac4b8d6..5882d77 100644
+--- a/drivers/gpu/ipu-v3/ipu-prv.h
++++ b/drivers/gpu/ipu-v3/ipu-prv.h
+@@ -179,7 +179,7 @@ struct ipu_soc {
+ 	struct device		*dev;
+ 	const struct ipu_devtype	*devtype;
+ 	enum ipuv3_type		ipu_type;
+-	spinlock_t		lock;
++	ipipe_spinlock_t	lock;
+ 	struct mutex		channel_lock;
+ 	struct list_head	channels;
+ 
+-- 
+1.9.1
+

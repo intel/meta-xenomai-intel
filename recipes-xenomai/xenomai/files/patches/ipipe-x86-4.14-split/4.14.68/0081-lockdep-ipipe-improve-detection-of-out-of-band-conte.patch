@@ -1,0 +1,145 @@
+From 007d91a5af5409a2d4c885f613b7953456aa0b1a Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 19 Aug 2018 12:45:10 +0200
+Subject: [PATCH 081/137] lockdep: ipipe: improve detection of out-of-band
+ contexts
+
+trace_hardirqs_on_virt[_caller]() must be invoked instead of
+trace_hardirqs_on[_caller]() from assembly sites before returning from
+an interrupt/fault, so that the virtual IRQ disable state is checked
+for before switching the tracer's logic state to ON.
+
+This is required as an interrupt may be received and handled by the
+pipeline core although not forwarded to the root domain, when
+interrupts are virtually disabled. In such a case, we want to
+reconcile the tracer's logic with the effect of interrupt pipelining.
+
+Conflicts:
+	kernel/trace/trace_irqsoff.c
+---
+ kernel/locking/lockdep.c     | 13 +++++++++----
+ kernel/trace/trace_irqsoff.c | 41 ++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 47 insertions(+), 7 deletions(-)
+
+diff --git a/kernel/locking/lockdep.c b/kernel/locking/lockdep.c
+index 52369f9..a9d7820f2 100644
+--- a/kernel/locking/lockdep.c
++++ b/kernel/locking/lockdep.c
+@@ -2931,6 +2931,12 @@ __visible void trace_hardirqs_on_caller(unsigned long ip)
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on_caller);
+ 
++void trace_hardirqs_on(void)
++{
++	trace_hardirqs_on_caller(CALLER_ADDR0);
++}
++EXPORT_SYMBOL(trace_hardirqs_on);
++
+ __visible void trace_hardirqs_on_virt_caller(unsigned long ip)
+ {
+ 	/*
+@@ -2938,15 +2944,14 @@ __visible void trace_hardirqs_on_virt_caller(unsigned long ip)
+ 	 * must consider the virtual disable flag exclusively when
+ 	 * leaving an interrupt/fault context.
+ 	 */
+-	if (ipipe_root_p && !raw_irqs_disabled())
++	if (ipipe_root_p && !irqs_disabled())
+ 		trace_hardirqs_on_caller(ip);
+ }
+ 
+-void trace_hardirqs_on(void)
++__visible void trace_hardirqs_on_virt(void)
+ {
+-	trace_hardirqs_on_caller(CALLER_ADDR0);
++	trace_hardirqs_on_virt_caller(CALLER_ADDR0);
+ }
+-EXPORT_SYMBOL(trace_hardirqs_on);
+ 
+ /*
+  * Hardirqs were disabled:
+diff --git a/kernel/trace/trace_irqsoff.c b/kernel/trace/trace_irqsoff.c
+index 1ccb33c..1c2381b 100644
+--- a/kernel/trace/trace_irqsoff.c
++++ b/kernel/trace/trace_irqsoff.c
+@@ -475,6 +475,12 @@ static inline void tracer_hardirqs_on(void)
+ 		stop_critical_timing(CALLER_ADDR0, CALLER_ADDR1);
+ }
+ 
++static inline void tracer_hardirqs_on_virt(void)
++{
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
++		stop_critical_timing(CALLER_ADDR0, CALLER_ADDR1);
++}
++
+ static inline void tracer_hardirqs_off(void)
+ {
+ 	if (ipipe_root_p && !preempt_trace() && irq_trace())
+@@ -487,10 +493,15 @@ static inline void tracer_hardirqs_on_caller(unsigned long caller_addr)
+ 		stop_critical_timing(CALLER_ADDR0, caller_addr);
+ }
+ 
+-static inline void trace_hardirqs_on_virt_caller(unsigned long caller_addr)
++static inline void tracer_hardirqs_on_virt_caller(unsigned long caller_addr)
+ {
+-	if (ipipe_root_p && !raw_irqs_disabled())
+-		trace_hardirqs_on_caller(caller_addr);
++	/*
++	 * The IRQ tracing logic only applies to the root domain, and
++	 * must consider the virtual disable flag exclusively when
++	 * leaving an interrupt/fault context.
++	 */
++	if (ipipe_root_p && !preempt_trace() && irq_trace())
++		stop_critical_timing(CALLER_ADDR0, caller_addr);
+ }
+ 
+ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr)
+@@ -775,8 +786,10 @@ __init static int init_irqsoff_tracer(void)
+ 
+ #ifndef CONFIG_IRQSOFF_TRACER
+ static inline void tracer_hardirqs_on(void) { }
++static inline void tracer_hardirqs_on_virt(void) { }
+ static inline void tracer_hardirqs_off(void) { }
+ static inline void tracer_hardirqs_on_caller(unsigned long caller_addr) { }
++static inline void tracer_hardirqs_on_virt_caller(unsigned long caller_addr) { }
+ static inline void tracer_hardirqs_off_caller(unsigned long caller_addr) { }
+ #endif
+ 
+@@ -801,6 +814,17 @@ void trace_hardirqs_on(void)
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on);
+ 
++void trace_hardirqs_on_virt(void)
++{
++	if (!this_cpu_read(tracing_irq_cpu))
++		return;
++
++	trace_irq_enable_rcuidle(CALLER_ADDR0, CALLER_ADDR1);
++	tracer_hardirqs_on_virt();
++
++	this_cpu_write(tracing_irq_cpu, 0);
++}
++
+ void trace_hardirqs_off(void)
+ {
+ 	if (this_cpu_read(tracing_irq_cpu))
+@@ -825,6 +849,17 @@ __visible void trace_hardirqs_on_caller(unsigned long caller_addr)
+ }
+ EXPORT_SYMBOL(trace_hardirqs_on_caller);
+ 
++__visible void trace_hardirqs_on_virt_caller(unsigned long caller_addr)
++{
++	if (!this_cpu_read(tracing_irq_cpu))
++		return;
++
++	trace_irq_enable_rcuidle(CALLER_ADDR0, caller_addr);
++	tracer_hardirqs_on_virt_caller(caller_addr);
++
++	this_cpu_write(tracing_irq_cpu, 0);
++}
++
+ __visible void trace_hardirqs_off_caller(unsigned long caller_addr)
+ {
+ 	if (this_cpu_read(tracing_irq_cpu))
+-- 
+1.9.1
+

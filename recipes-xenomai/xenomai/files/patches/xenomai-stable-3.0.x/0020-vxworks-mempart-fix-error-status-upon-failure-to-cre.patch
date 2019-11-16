@@ -1,0 +1,44 @@
+From a2586238b9116872b488ce5435348134d02c9df4 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 14 Nov 2018 11:41:52 +0100
+Subject: [PATCH 20/21] vxworks/mempart: fix error status upon failure to
+ create partition
+
+Signed-off-by: Philippe Gerum <rpm@xenomai.org>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ lib/vxworks/memPartLib.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/lib/vxworks/memPartLib.c b/lib/vxworks/memPartLib.c
+index 22d77bd..c8eeb36 100644
+--- a/lib/vxworks/memPartLib.c
++++ b/lib/vxworks/memPartLib.c
+@@ -48,17 +48,21 @@ PART_ID memPartCreate(char *pPool, unsigned int poolSize)
+ 	pthread_mutexattr_t mattr;
+ 	struct wind_mempart *mp;
+ 	struct service svc;
++	int ret;
+ 
+ 	CANCEL_DEFER(svc);
+ 
+ 	mp = xnmalloc(sizeof(*mp));
+-	if (mp == NULL)
++	if (mp == NULL) {
++		errno = S_memLib_NOT_ENOUGH_MEMORY;
+ 		goto fail;
++	}
+ 
+-	if (__heapobj_init(&mp->hobj, NULL, poolSize, pPool)) {
++	ret = __heapobj_init(&mp->hobj, NULL, poolSize, pPool);
++	if (ret) {
+ 		xnfree(mp);
++		errno = S_memLib_INVALID_NBYTES;
+ 	fail:
+-		errno = S_memLib_NOT_ENOUGH_MEMORY;
+ 		CANCEL_RESTORE(svc);
+ 		return (PART_ID)0;
+ 	}
+-- 
+1.9.1
+

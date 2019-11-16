@@ -1,0 +1,40 @@
+From 689d17bf703cc655a432f5334bc7cbf3174150a0 Mon Sep 17 00:00:00 2001
+From: Arnd Bergmann <arnd@arndb.de>
+Date: Fri, 13 Oct 2017 16:22:20 +0200
+Subject: [PATCH 20/66] tracing: mark trace_test_buffer as __maybe_unused
+
+After trace_selftest_startup_sched_switch is removed, trace_test_buffer()
+is only used sometimes, leading to this warning:
+
+kernel/trace/trace_selftest.c:62:12: error: 'trace_test_buffer' defined but not used [-Werror=unused-function]
+
+There is no simple #ifdef condition that captures well whether the
+function is in fact used or not, so marking it as __maybe_unused is
+probably the best way to shut up the warning. The function will then
+be silently dropped when there is no user.
+
+Link: http://lkml.kernel.org/r/20171013142227.1273469-1-arnd@arndb.de
+
+Fixes: d8c4deee6dc6 ("tracing: Remove obsolete sched_switch tracer selftest")
+Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ kernel/trace/trace_selftest.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/kernel/trace/trace_selftest.c b/kernel/trace/trace_selftest.c
+index 2b5a6f5..11e9daa 100644
+--- a/kernel/trace/trace_selftest.c
++++ b/kernel/trace/trace_selftest.c
+@@ -60,7 +60,7 @@ static int trace_test_buffer_cpu(struct trace_buffer *buf, int cpu)
+  * Test the trace buffer to see if all the elements
+  * are still sane.
+  */
+-static int trace_test_buffer(struct trace_buffer *buf, unsigned long *count)
++static int __maybe_unused trace_test_buffer(struct trace_buffer *buf, unsigned long *count)
+ {
+ 	unsigned long flags, cnt = 0;
+ 	int cpu, ret = 0;
+-- 
+1.9.1
+

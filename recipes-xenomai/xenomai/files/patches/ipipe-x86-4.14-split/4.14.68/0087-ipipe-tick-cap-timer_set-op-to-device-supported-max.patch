@@ -1,0 +1,53 @@
+From 66a7aadafde0ef3300becd246767c31f822dd0ca Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 22 Aug 2018 16:17:06 +0200
+Subject: [PATCH 087/137] ipipe: tick: cap timer_set op to device supported max
+
+At this chance, switch the min_delay_tick value to unsigned long to
+match the corresponding clockevent definition.
+---
+ include/linux/ipipe_tickdev.h | 3 ++-
+ kernel/ipipe/timer.c          | 6 ++++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/include/linux/ipipe_tickdev.h b/include/linux/ipipe_tickdev.h
+index 120fb03..1e1bcc9 100644
+--- a/include/linux/ipipe_tickdev.h
++++ b/include/linux/ipipe_tickdev.h
+@@ -64,7 +64,8 @@ struct ipipe_timer {
+ 	const char *name;
+ 	unsigned rating;
+ 	unsigned long freq;
+-	unsigned min_delay_ticks;
++	unsigned long min_delay_ticks;
++	unsigned long max_delay_ticks;
+ 	const struct cpumask *cpumask;
+ 
+ 	/* For internal use */
+diff --git a/kernel/ipipe/timer.c b/kernel/ipipe/timer.c
+index 85b083c..f01414f 100644
+--- a/kernel/ipipe/timer.c
++++ b/kernel/ipipe/timer.c
+@@ -133,6 +133,10 @@ void ipipe_host_timer_register(struct clock_event_device *evtdev)
+ 		timer->min_delay_ticks =
+ 			(evtdev->min_delta_ns * evtdev->mult) >> evtdev->shift;
+ 
++	if (timer->max_delay_ticks == 0)
++		timer->max_delay_ticks =
++			(evtdev->max_delta_ns * evtdev->mult) >> evtdev->shift;
++
+ 	if (timer->cpumask == NULL)
+ 		timer->cpumask = evtdev->cpumask;
+ 
+@@ -499,6 +503,8 @@ void ipipe_timer_set(unsigned long cdelay)
+ 		tdelay += ((unsigned long long)cdelay * t->c2t_frac) >> 32;
+ 	if (tdelay < t->min_delay_ticks)
+ 		tdelay = t->min_delay_ticks;
++	if (tdelay > t->max_delay_ticks)
++		tdelay = t->max_delay_ticks;
+ 
+ 	if (t->set(tdelay, t->timer_set) < 0)
+ 		ipipe_raise_irq(t->irq);
+-- 
+1.9.1
+

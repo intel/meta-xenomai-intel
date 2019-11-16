@@ -1,0 +1,24 @@
+From 49d2675e814635b29f39127ee3bb1f6c65703906 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Tue, 11 Sep 2018 19:42:08 +0200
+Subject: [PATCH 095/137] sched: idle: ipipe: drop spurious check
+
+---
+ kernel/ipipe/core.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/kernel/ipipe/core.c b/kernel/ipipe/core.c
+index 19817e1..7ac5208 100644
+--- a/kernel/ipipe/core.c
++++ b/kernel/ipipe/core.c
+@@ -1932,7 +1932,6 @@ bool ipipe_enter_cpuidle(struct cpuidle_device *dev,
+ {
+ 	struct ipipe_percpu_domain_data *p;
+ 
+-	WARN_ON_ONCE(hard_irqs_disabled());
+ 	WARN_ON_ONCE(!irqs_disabled());
+ 	
+ 	hard_local_irq_disable();
+-- 
+1.9.1
+

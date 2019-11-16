@@ -1,0 +1,77 @@
+From 64f207dcbf3b00558196f84776263a50c37a928d Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Mon, 1 Oct 2018 15:56:17 +0200
+Subject: [PATCH 15/21] cobalt/sched: fix mismatches between supported CPUs and
+ affinity set
+
+xnsched_realtime_cpus is a misnomer defining the set of CPUs which may
+handle timer events.
+
+cobalt_cpu_affinity is a subset of xnsched_realtime_cpus which defines
+which CPU(s) may run Cobalt threads.
+
+Signed-off-by: Philippe Gerum <rpm@xenomai.org>
+Signed-off-by: Jan Kiszka <jan.kiszka@siemens.com>
+---
+ include/cobalt/kernel/sched.h | 10 ++++++++++
+ kernel/cobalt/posix/process.c |  2 +-
+ kernel/cobalt/posix/sched.c   |  2 +-
+ 3 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/include/cobalt/kernel/sched.h b/include/cobalt/kernel/sched.h
+index d525fb2..7d1c18a 100644
+--- a/include/cobalt/kernel/sched.h
++++ b/include/cobalt/kernel/sched.h
+@@ -235,6 +235,11 @@ static inline int xnsched_supported_cpu(int cpu)
+ 	return cpumask_test_cpu(cpu, &xnsched_realtime_cpus);
+ }
+ 
++static inline int xnsched_threading_cpu(int cpu)
++{
++	return cpumask_test_cpu(cpu, &cobalt_cpu_affinity);
++}
++
+ #else /* !CONFIG_SMP */
+ 
+ static inline void xnsched_set_resched(struct xnsched *sched)
+@@ -249,6 +254,11 @@ static inline int xnsched_supported_cpu(int cpu)
+ 	return 1;
+ }
+ 
++static inline int xnsched_threading_cpu(int cpu)
++{
++	return 1;
++}
++
+ #endif /* !CONFIG_SMP */
+ 
+ #define for_each_realtime_cpu(cpu)		\
+diff --git a/kernel/cobalt/posix/process.c b/kernel/cobalt/posix/process.c
+index cac570b..6b10abb 100644
+--- a/kernel/cobalt/posix/process.c
++++ b/kernel/cobalt/posix/process.c
+@@ -892,7 +892,7 @@ static inline bool affinity_ok(struct task_struct *p) /* nklocked, IRQs off */
+ 	 * in secondary mode. If so, do the fixups to reflect the
+ 	 * change.
+ 	 */
+-	if (!xnsched_supported_cpu(cpu)) {
++	if (!xnsched_threading_cpu(cpu)) {
+ 		/*
+ 		 * The thread is about to switch to primary mode on a
+ 		 * non-rt CPU, which is damn wrong and hopeless.
+diff --git a/kernel/cobalt/posix/sched.c b/kernel/cobalt/posix/sched.c
+index 4ae8738..83efdf0 100644
+--- a/kernel/cobalt/posix/sched.c
++++ b/kernel/cobalt/posix/sched.c
+@@ -622,7 +622,7 @@ int __cobalt_sched_setconfig_np(int cpu, int policy,
+ 
+ 	trace_cobalt_sched_setconfig(cpu, policy, len);
+ 
+-	if (cpu < 0 || cpu >= NR_CPUS || !xnsched_supported_cpu(cpu))
++	if (cpu < 0 || cpu >= NR_CPUS || !xnsched_threading_cpu(cpu))
+ 		return -EINVAL;
+ 
+ 	if (len == 0)
+-- 
+1.9.1
+

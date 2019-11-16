@@ -1,0 +1,27 @@
+From 7eea95f8276fb279c1ffa811a1a10bc8e8637310 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Sun, 3 Dec 2017 17:31:31 +0100
+Subject: [PATCH 076/137] pci: pcie-altera: ipipe: enable interrupt pipelining
+
+Fix up Altera's PCIE driver in order to channel interrupts through the
+interrupt pipeline.
+---
+ drivers/pci/host/pcie-altera.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/pci/host/pcie-altera.c b/drivers/pci/host/pcie-altera.c
+index b468b8ccc..67a465e 100644
+--- a/drivers/pci/host/pcie-altera.c
++++ b/drivers/pci/host/pcie-altera.c
+@@ -486,7 +486,7 @@ static void altera_pcie_isr(struct irq_desc *desc)
+ 
+ 			virq = irq_find_mapping(pcie->irq_domain, bit);
+ 			if (virq)
+-				generic_handle_irq(virq);
++				ipipe_handle_demuxed_irq(virq);
+ 			else
+ 				dev_err(dev, "unexpected IRQ, INT%d\n", bit);
+ 		}
+-- 
+1.9.1
+

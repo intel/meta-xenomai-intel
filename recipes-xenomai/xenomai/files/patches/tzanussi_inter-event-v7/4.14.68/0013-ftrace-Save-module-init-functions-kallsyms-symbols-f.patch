@@ -1,0 +1,350 @@
+From ec8a5666e86a372371b15cc3f5f00340306b9201 Mon Sep 17 00:00:00 2001
+From: "Steven Rostedt (VMware)" <rostedt@goodmis.org>
+Date: Fri, 1 Sep 2017 08:35:38 -0400
+Subject: [PATCH 13/66] ftrace: Save module init functions kallsyms symbols for
+ tracing
+
+If function tracing is active when the module init functions are freed, then
+store them to be referenced by kallsyms. As module init functions can now be
+traced on module load, they were useless:
+
+ ># echo ':mod:snd_seq' > set_ftrace_filter
+ ># echo function > current_tracer
+ ># modprobe snd_seq
+ ># cat trace
+ # tracer: function
+ #
+ #                              _-----=> irqs-off
+ #                             / _----=> need-resched
+ #                            | / _---=> hardirq/softirq
+ #                            || / _--=> preempt-depth
+ #                            ||| /     delay
+ #           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+ #              | |       |   ||||       |         |
+         modprobe-2786  [000] ....  3189.037874: 0xffffffffa0860000 <-do_one_initcall
+         modprobe-2786  [000] ....  3189.037876: 0xffffffffa086004d <-0xffffffffa086000f
+         modprobe-2786  [000] ....  3189.037876: 0xffffffffa086010d <-0xffffffffa0860018
+         modprobe-2786  [000] ....  3189.037877: 0xffffffffa086011a <-0xffffffffa0860021
+         modprobe-2786  [000] ....  3189.037877: 0xffffffffa0860080 <-0xffffffffa086002a
+         modprobe-2786  [000] ....  3189.039523: 0xffffffffa0860400 <-0xffffffffa0860033
+         modprobe-2786  [000] ....  3189.039523: 0xffffffffa086038a <-0xffffffffa086041c
+         modprobe-2786  [000] ....  3189.039591: 0xffffffffa086038a <-0xffffffffa0860436
+         modprobe-2786  [000] ....  3189.039657: 0xffffffffa086038a <-0xffffffffa0860450
+         modprobe-2786  [000] ....  3189.039719: 0xffffffffa0860127 <-0xffffffffa086003c
+         modprobe-2786  [000] ....  3189.039742: snd_seq_create_kernel_client <-0xffffffffa08601f6
+
+When the output is shown, the kallsyms for the module init functions have
+already been freed, and the output of the trace can not convert them to
+their function names.
+
+Now this looks like this:
+
+ # tracer: function
+ #
+ #                              _-----=> irqs-off
+ #                             / _----=> need-resched
+ #                            | / _---=> hardirq/softirq
+ #                            || / _--=> preempt-depth
+ #                            ||| /     delay
+ #           TASK-PID   CPU#  ||||    TIMESTAMP  FUNCTION
+ #              | |       |   ||||       |         |
+         modprobe-2463  [002] ....   174.243237: alsa_seq_init <-do_one_initcall
+         modprobe-2463  [002] ....   174.243239: client_init_data <-alsa_seq_init
+         modprobe-2463  [002] ....   174.243240: snd_sequencer_memory_init <-alsa_seq_init
+         modprobe-2463  [002] ....   174.243240: snd_seq_queues_init <-alsa_seq_init
+         modprobe-2463  [002] ....   174.243240: snd_sequencer_device_init <-alsa_seq_init
+         modprobe-2463  [002] ....   174.244860: snd_seq_info_init <-alsa_seq_init
+         modprobe-2463  [002] ....   174.244861: create_info_entry <-snd_seq_info_init
+         modprobe-2463  [002] ....   174.244936: create_info_entry <-snd_seq_info_init
+         modprobe-2463  [002] ....   174.245003: create_info_entry <-snd_seq_info_init
+         modprobe-2463  [002] ....   174.245072: snd_seq_system_client_init <-alsa_seq_init
+         modprobe-2463  [002] ....   174.245094: snd_seq_create_kernel_client <-snd_seq_system_client_init
+
+Signed-off-by: Steven Rostedt (VMware) <rostedt@goodmis.org>
+---
+ include/linux/ftrace.h |  20 ++++++-
+ kernel/kallsyms.c      |   5 ++
+ kernel/module.c        |   2 +-
+ kernel/trace/ftrace.c  | 146 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 4 files changed, 168 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/ftrace.h b/include/linux/ftrace.h
+index 1ed4e40..7e80e57 100644
+--- a/include/linux/ftrace.h
++++ b/include/linux/ftrace.h
+@@ -52,6 +52,21 @@ static inline void early_trace_init(void) { }
+ struct module;
+ struct ftrace_hash;
+ 
++#if defined(CONFIG_FUNCTION_TRACER) && defined(CONFIG_MODULES) && \
++	defined(CONFIG_DYNAMIC_FTRACE)
++const char *
++ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
++		   unsigned long *off, char **modname, char *sym);
++#else
++static inline const char *
++ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
++		   unsigned long *off, char **modname, char *sym)
++{
++	return NULL;
++}
++#endif
++
++
+ #ifdef CONFIG_FUNCTION_TRACER
+ 
+ extern int ftrace_enabled;
+@@ -152,10 +167,10 @@ struct ftrace_ops_hash {
+ };
+ 
+ void ftrace_free_init_mem(void);
+-void ftrace_free_mem(void *start, void *end);
++void ftrace_free_mem(struct module *mod, void *start, void *end);
+ #else
+ static inline void ftrace_free_init_mem(void) { }
+-static inline void ftrace_free_mem(void *start, void *end) { }
++static inline void ftrace_free_mem(struct module *mod, void *start, void *end) { }
+ #endif
+ 
+ /*
+@@ -273,6 +288,7 @@ static inline int ftrace_nr_registered_ops(void)
+ static inline void clear_ftrace_function(void) { }
+ static inline void ftrace_kill(void) { }
+ static inline void ftrace_free_init_mem(void) { }
++static inline void ftrace_free_mem(struct module *mod, void *start, void *end) { }
+ #endif /* CONFIG_FUNCTION_TRACER */
+ 
+ #ifdef CONFIG_STACK_TRACER
+diff --git a/kernel/kallsyms.c b/kernel/kallsyms.c
+index 127e7cf..976ecb9 100644
+--- a/kernel/kallsyms.c
++++ b/kernel/kallsyms.c
+@@ -24,6 +24,7 @@
+ #include <linux/ctype.h>
+ #include <linux/slab.h>
+ #include <linux/filter.h>
++#include <linux/ftrace.h>
+ #include <linux/compiler.h>
+ 
+ #include <asm/sections.h>
+@@ -337,6 +338,10 @@ const char *kallsyms_lookup(unsigned long addr,
+ 	if (!ret)
+ 		ret = bpf_address_lookup(addr, symbolsize,
+ 					 offset, modname, namebuf);
++
++	if (!ret)
++		ret = ftrace_mod_address_lookup(addr, symbolsize,
++						offset, modname, namebuf);
+ 	return ret;
+ }
+ 
+diff --git a/kernel/module.c b/kernel/module.c
+index 06acd62..811cbf2 100644
+--- a/kernel/module.c
++++ b/kernel/module.c
+@@ -3484,7 +3484,7 @@ static noinline int do_init_module(struct module *mod)
+ 	if (!mod->async_probe_requested && (current->flags & PF_USED_ASYNC))
+ 		async_synchronize_full();
+ 
+-	ftrace_free_mem(mod->init_layout.base, mod->init_layout.base +
++	ftrace_free_mem(mod, mod->init_layout.base, mod->init_layout.base +
+ 			mod->init_layout.size);
+ 	mutex_lock(&module_mutex);
+ 	/* Drop initial reference. */
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+index ee31fde..6efb45a 100644
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -5671,6 +5671,21 @@ static int ftrace_process_locs(struct module *mod,
+ 	return ret;
+ }
+ 
++struct ftrace_mod_func {
++	struct list_head	list;
++	char			*name;
++	unsigned long		ip;
++	unsigned int		size;
++};
++
++struct ftrace_mod_map {
++	struct list_head	list;
++	struct module		*mod;
++	unsigned long		start_addr;
++	unsigned long		end_addr;
++	struct list_head	funcs;
++};
++
+ #ifdef CONFIG_MODULES
+ 
+ #define next_to_ftrace_page(p) container_of(p, struct ftrace_page, next)
+@@ -5864,9 +5879,123 @@ void ftrace_module_init(struct module *mod)
+ 	ftrace_process_locs(mod, mod->ftrace_callsites,
+ 			    mod->ftrace_callsites + mod->num_ftrace_callsites);
+ }
++
++static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
++				struct dyn_ftrace *rec)
++{
++	struct ftrace_mod_func *mod_func;
++	unsigned long symsize;
++	unsigned long offset;
++	char str[KSYM_SYMBOL_LEN];
++	char *modname;
++	const char *ret;
++
++	ret = kallsyms_lookup(rec->ip, &symsize, &offset, &modname, str);
++	if (!ret)
++		return;
++
++	mod_func = kmalloc(sizeof(*mod_func), GFP_KERNEL);
++	if (!mod_func)
++		return;
++
++	mod_func->name = kstrdup(str, GFP_KERNEL);
++	if (!mod_func->name) {
++		kfree(mod_func);
++		return;
++	}
++
++	mod_func->ip = rec->ip - offset;
++	mod_func->size = symsize;
++
++	list_add_rcu(&mod_func->list, &mod_map->funcs);
++}
++
++static LIST_HEAD(ftrace_mod_maps);
++
++static struct ftrace_mod_map *
++allocate_ftrace_mod_map(struct module *mod,
++			unsigned long start, unsigned long end)
++{
++	struct ftrace_mod_map *mod_map;
++
++	mod_map = kmalloc(sizeof(*mod_map), GFP_KERNEL);
++	if (!mod_map)
++		return NULL;
++
++	mod_map->mod = mod;
++	mod_map->start_addr = start;
++	mod_map->end_addr = end;
++
++	INIT_LIST_HEAD_RCU(&mod_map->funcs);
++
++	list_add_rcu(&mod_map->list, &ftrace_mod_maps);
++
++	return mod_map;
++}
++
++static const char *
++ftrace_func_address_lookup(struct ftrace_mod_map *mod_map,
++			   unsigned long addr, unsigned long *size,
++			   unsigned long *off, char *sym)
++{
++	struct ftrace_mod_func *found_func =  NULL;
++	struct ftrace_mod_func *mod_func;
++
++	list_for_each_entry_rcu(mod_func, &mod_map->funcs, list) {
++		if (addr >= mod_func->ip &&
++		    addr < mod_func->ip + mod_func->size) {
++			found_func = mod_func;
++			break;
++		}
++	}
++
++	if (found_func) {
++		if (size)
++			*size = found_func->size;
++		if (off)
++			*off = addr - found_func->ip;
++		if (sym)
++			strlcpy(sym, found_func->name, KSYM_NAME_LEN);
++
++		return found_func->name;
++	}
++
++	return NULL;
++}
++
++const char *
++ftrace_mod_address_lookup(unsigned long addr, unsigned long *size,
++		   unsigned long *off, char **modname, char *sym)
++{
++	struct ftrace_mod_map *mod_map;
++	const char *ret = NULL;
++
++	preempt_disable();
++	list_for_each_entry_rcu(mod_map, &ftrace_mod_maps, list) {
++		ret = ftrace_func_address_lookup(mod_map, addr, size, off, sym);
++		if (ret) {
++			if (modname)
++				*modname = mod_map->mod->name;
++			break;
++		}
++	}
++	preempt_enable();
++
++	return ret;
++}
++
++#else
++static void save_ftrace_mod_rec(struct ftrace_mod_map *mod_map,
++				struct dyn_ftrace *rec) { }
++static inline struct ftrace_mod_map *
++allocate_ftrace_mod_map(struct module *mod,
++			unsigned long start, unsigned long end)
++{
++	return NULL;
++}
+ #endif /* CONFIG_MODULES */
+ 
+-void ftrace_free_mem(void *start_ptr, void *end_ptr)
++void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
+ {
+ 	unsigned long start = (unsigned long)(start_ptr);
+ 	unsigned long end = (unsigned long)(end_ptr);
+@@ -5874,6 +6003,7 @@ void ftrace_free_mem(void *start_ptr, void *end_ptr)
+ 	struct ftrace_page *pg;
+ 	struct dyn_ftrace *rec;
+ 	struct dyn_ftrace key;
++	struct ftrace_mod_map *mod_map = NULL;
+ 	int order;
+ 
+ 	key.ip = start;
+@@ -5881,6 +6011,14 @@ void ftrace_free_mem(void *start_ptr, void *end_ptr)
+ 
+ 	mutex_lock(&ftrace_lock);
+ 
++	/*
++	 * If we are freeing module init memory, then check if
++	 * any tracer is active. If so, we need to save a mapping of
++	 * the module functions being freed with the address.
++	 */
++	if (mod && ftrace_ops_list != &ftrace_list_end)
++		mod_map = allocate_ftrace_mod_map(mod, start, end);
++
+ 	for (pg = ftrace_pages_start; pg; last_pg = &pg->next, pg = *last_pg) {
+ 		if (end < pg->records[0].ip ||
+ 		    start >= (pg->records[pg->index - 1].ip + MCOUNT_INSN_SIZE))
+@@ -5891,6 +6029,10 @@ void ftrace_free_mem(void *start_ptr, void *end_ptr)
+ 			      ftrace_cmp_recs);
+ 		if (!rec)
+ 			continue;
++
++		if (mod_map)
++			save_ftrace_mod_rec(mod_map, rec);
++
+ 		pg->index--;
+ 		ftrace_update_tot_cnt--;
+ 		if (!pg->index) {
+@@ -5916,7 +6058,7 @@ void __init ftrace_free_init_mem(void)
+ 	void *start = (void *)(&__init_begin);
+ 	void *end = (void *)(&__init_end);
+ 
+-	ftrace_free_mem(start, end);
++	ftrace_free_mem(NULL, start, end);
+ }
+ 
+ void __init ftrace_init(void)
+-- 
+1.9.1
+

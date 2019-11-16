@@ -1,0 +1,47 @@
+From 1fd772a60e05dcf12066f1d4b906ed7879971152 Mon Sep 17 00:00:00 2001
+From: Philippe Gerum <rpm@xenomai.org>
+Date: Wed, 4 Jul 2018 18:20:50 +0200
+Subject: [PATCH 012/137] PM / hibernate: ipipe: protect against out-of-band
+ interrupts
+
+We must not allow out-of-band activity to resume while we are busy
+suspending the devices in the system, until the PM sleep state has
+been fully entered.
+
+Pair existing virtual IRQ disabling calls which only apply to the root
+domain with hard ones.
+---
+ kernel/power/hibernate.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/kernel/power/hibernate.c b/kernel/power/hibernate.c
+index a5c36e9..6a2818e 100644
+--- a/kernel/power/hibernate.c
++++ b/kernel/power/hibernate.c
+@@ -286,6 +286,7 @@ static int create_image(int platform_mode)
+ 		goto Enable_cpus;
+ 
+ 	local_irq_disable();
++	hard_cond_local_irq_disable();
+ 
+ 	error = syscore_suspend();
+ 	if (error) {
+@@ -445,6 +446,7 @@ static int resume_target_kernel(bool platform_mode)
+ 		goto Enable_cpus;
+ 
+ 	local_irq_disable();
++	hard_cond_local_irq_disable();
+ 
+ 	error = syscore_suspend();
+ 	if (error)
+@@ -563,6 +565,7 @@ int hibernation_platform_enter(void)
+ 		goto Enable_cpus;
+ 
+ 	local_irq_disable();
++	hard_cond_local_irq_disable();
+ 	syscore_suspend();
+ 	if (pm_wakeup_pending()) {
+ 		error = -EAGAIN;
+-- 
+1.9.1
+
